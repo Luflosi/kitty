@@ -1,7 +1,7 @@
 #pragma once
 #include "data-types.h"
-#define VS15 1280
-#define VS16 1281
+#define VS15 1285
+#define VS16 1286
 
 bool is_combining_char(char_type ch);
 bool is_ignored_char(char_type ch);
@@ -28,4 +28,10 @@ can_strip_from_end_of_url(uint32_t ch) {
 static inline bool
 is_private_use(char_type ch) {
     return (0xe000 <= ch && ch <= 0xf8ff) || (0xF0000 <= ch && ch <= 0xFFFFF) || (0x100000 <= ch && ch <= 0x10FFFF);
+}
+
+
+static inline bool
+is_flag_codepoint(char_type ch) {
+    return 0x1F1E6 <= ch && ch <= 0x1F1FF;
 }

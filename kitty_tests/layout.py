@@ -3,9 +3,9 @@
 # License: GPL v3 Copyright: 2018, Kovid Goyal <kovid at kovidgoyal.net>
 
 from kitty.config import defaults
-from kitty.fast_data_types import pt_to_px
-from kitty.layout import Horizontal, Stack, Tall, Grid, idx_for_id, Splits
 from kitty.constants import WindowGeometry
+from kitty.layout import Grid, Horizontal, Splits, Stack, Tall, idx_for_id
+from kitty.window import EdgeWidths
 
 from . import BaseTest
 
@@ -18,6 +18,17 @@ class Window:
         self.overlay_window_id = overlay_window_id
         self.is_visible_in_layout = True
         self.geometry = WindowGeometry(0, 0, 0, 0, 0, 0)
+        self.padding = EdgeWidths()
+        self.margin = EdgeWidths()
+
+    def effective_border(self):
+        return 1
+
+    def effective_padding(self, edge):
+        return 1
+
+    def effective_margin(self, edge, is_single_window=False):
+        return 0 if is_single_window else 1
 
     def set_visible_in_layout(self, idx, val):
         self.is_visible_in_layout = bool(val)
@@ -29,8 +40,7 @@ class Window:
 def create_layout(cls, opts=None, border_width=2):
     if opts is None:
         opts = defaults
-    mw, pw = map(pt_to_px, (opts.window_margin_width, opts.window_padding_width))
-    ans = cls(1, 1, mw, mw, pw, border_width)
+    ans = cls(1, 1)
     ans.set_active_window_in_os_window = lambda idx: None
     ans.swap_windows_in_os_window = lambda a, b: None
     return ans

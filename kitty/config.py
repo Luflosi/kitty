@@ -23,7 +23,7 @@ from .config_data import all_options, parse_mods, type_convert
 from .constants import cache_dir, defconf, is_macos
 from .key_names import get_key_name_lookup, key_name_aliases
 from .options_stub import Options as OptionsStub
-from .typing import TypedDict
+from .typing import EdgeLiteral, TypedDict
 from .utils import log_error
 
 KeySpec = Tuple[int, bool, int]
@@ -237,6 +237,15 @@ def set_colors(func: str, rest: str) -> FuncArgsType:
     r = shlex.split(rest)
     if len(r) < 1:
         log_error('Too few arguments to set_colors function')
+    return func, r
+
+
+@func_with_args('remote_control')
+def remote_control(func: str, rest: str) -> FuncArgsType:
+    import shlex
+    r = shlex.split(rest)
+    if len(r) < 1:
+        log_error('Too few arguments to remote_control function')
     return func, r
 
 
@@ -576,7 +585,7 @@ def handle_deprecated_macos_show_window_title_in_menubar_alias(key: str, val: st
     ans['macos_show_window_title_in'] = macos_show_window_title_in
 
 
-def expandvars(val: str, env: Dict[str, str]) -> str:
+def expandvars(val: str, env: Dict[str, str] = {}) -> str:
 
     def sub(m: Match) -> str:
         key = m.group(1)
@@ -730,12 +739,23 @@ def initial_window_size_func(opts: OptionsStub, cached_values: Dict) -> Callable
             # scaling is not needed on Wayland, but is needed on macOS. Not
             # sure about X11.
             xscale = yscale = 1
+
+        def effective_margin(which: EdgeLiteral) -> float:
+            ans: float = getattr(opts.single_window_margin_width, which)
+            if ans < 0:
+                ans = getattr(opts.window_margin_width, which)
+            return ans
+
         if w_unit == 'cells':
-            width = cell_width * w / xscale + (dpi_x / 72) * (opts.window_margin_width + opts.window_padding_width) + 1
+            spacing = effective_margin('left') + effective_margin('right')
+            spacing += opts.window_padding_width.left + opts.window_padding_width.right
+            width = cell_width * w / xscale + (dpi_x / 72) * spacing + 1
         else:
             width = w
         if h_unit == 'cells':
-            height = cell_height * h / yscale + (dpi_y / 72) * (opts.window_margin_width + opts.window_padding_width) + 1
+            spacing = effective_margin('top') + effective_margin('bottom')
+            spacing += opts.window_padding_width.top + opts.window_padding_width.bottom
+            height = cell_height * h / yscale + (dpi_y / 72) * spacing + 1
         else:
             height = h
         return int(width), int(height)

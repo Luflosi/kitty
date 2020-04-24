@@ -15,7 +15,7 @@ from .child import set_default_env
 from .cli import create_opts, parse_args
 from .cli_stub import CLIOptions
 from .conf.utils import BadLine
-from .config import cached_values_for, initial_window_size_func
+from .config import cached_values_for, initial_window_size_func, expandvars
 from .constants import (
     appname, beam_cursor_data_file, config_dir, glfw_path, is_macos,
     is_wayland, kitty_exe, logo_data_file, running_in_kitty
@@ -149,7 +149,7 @@ def _run_app(opts: OptionsStub, args: CLIOptions, bad_lines: Sequence[BadLine] =
             window_id = create_os_window(
                     run_app.initial_window_size_func(opts, cached_values),
                     pre_show_callback,
-                    appname, args.name or args.cls or appname,
+                    args.title or appname, args.name or args.cls or appname,
                     args.cls or appname, load_all_shaders)
         boss = Boss(opts, args, cached_values, new_os_window_trigger, paste_from_clipboard_trigger)
         boss.start(window_id)
@@ -170,7 +170,7 @@ class AppRunner:
 
     def __call__(self, opts: OptionsStub, args: CLIOptions, bad_lines: Sequence[BadLine] = ()) -> None:
         set_scale(opts.box_drawing_scale)
-        set_options(opts, is_wayland(), args.debug_gl, args.debug_font_fallback)
+        set_options(opts, is_wayland(), args.debug_rendering, args.debug_font_fallback)
         set_font_family(opts, debug_font_matching=args.debug_font_fallback)
         try:
             _run_app(opts, args, bad_lines)
@@ -248,6 +248,22 @@ def get_editor_from_env(shell_env: Mapping[str, str]) -> Optional[str]:
                 return editor
 
 
+def expand_listen_on(listen_on: str, from_config_file: bool) -> str:
+    listen_on = expandvars(listen_on)
+    if '{kitty_pid}' not in listen_on and from_config_file:
+        listen_on += '-{kitty_pid}'
+    listen_on = listen_on.replace('{kitty_pid}', str(os.getpid()))
+    if listen_on.startswith('unix:'):
+        path = listen_on[len('unix:'):]
+        if not path.startswith('@'):
+            if path.startswith('~'):
+                listen_on = f'unix:{os.path.expanduser(path)}'
+            elif not os.path.isabs(path):
+                import tempfile
+                listen_on = f'unix:{os.path.join(tempfile.gettempdir(), path)}'
+    return listen_on
+
+
 def setup_environment(opts: OptionsStub, cli_opts: CLIOptions) -> None:
     extra_env = opts.env.copy()
     if opts.editor == '.':
@@ -259,7 +275,12 @@ def setup_environment(opts: OptionsStub, cli_opts: CLIOptions) -> None:
             os.environ['EDITOR'] = editor
     else:
         os.environ['EDITOR'] = opts.editor
-    if cli_opts.listen_on:
+    from_config_file = False
+    if not cli_opts.listen_on and opts.listen_on.startswith('unix:'):
+        cli_opts.listen_on = opts.listen_on
+        from_config_file = True
+    if cli_opts.listen_on and opts.allow_remote_control != 'n':
+        cli_opts.listen_on = expand_listen_on(cli_opts.listen_on, from_config_file)
         os.environ['KITTY_LISTEN_ON'] = cli_opts.listen_on
     set_default_env(extra_env)
 

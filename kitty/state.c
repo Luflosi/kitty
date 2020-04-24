@@ -27,13 +27,25 @@ GlobalState global_state = {{0}};
 #define END_WITH_OS_WINDOW break; }}
 
 #define WITH_TAB(os_window_id, tab_id) \
-    for (size_t o = 0; o < global_state.num_os_windows; o++) { \
+    for (size_t o = 0, tab_found = 0; o < global_state.num_os_windows && !tab_found; o++) { \
         OSWindow *osw = global_state.os_windows + o; \
         if (osw->id == os_window_id) { \
             for (size_t t = 0; t < osw->num_tabs; t++) { \
                 if (osw->tabs[t].id == tab_id) { \
                     Tab *tab = osw->tabs + t;
-#define END_WITH_TAB break; }}}}
+#define END_WITH_TAB tab_found = 1; break; }}}}
+
+#define WITH_WINDOW(os_window_id, tab_id, window_id) \
+    for (size_t o = 0, window_found = 0; o < global_state.num_os_windows && !window_found; o++) { \
+        OSWindow *osw = global_state.os_windows + o; \
+        if (osw->id == os_window_id) { \
+            for (size_t t = 0; t < osw->num_tabs && !window_found; t++) { \
+                if (osw->tabs[t].id == tab_id) { \
+                    Tab *tab = osw->tabs + t; \
+                    for (size_t w = 0; w < tab->num_windows; w++) { \
+                        Window *window = tab->windows + w;
+#define END_WITH_WINDOW break; }}}}}
+
 
 #define WITH_OS_WINDOW_REFS \
     id_type cb_window_id = 0, focused_window_id = 0; \
@@ -577,14 +589,14 @@ PYWRAP1(handle_for_window_id) {
 
 PYWRAP1(set_options) {
     PyObject *ret, *opts;
-    int is_wayland = 0, debug_gl = 0, debug_font_fallback = 0;
-    PA("O|ppp", &opts, &is_wayland, &debug_gl, &debug_font_fallback);
+    int is_wayland = 0, debug_rendering = 0, debug_font_fallback = 0;
+    PA("O|ppp", &opts, &is_wayland, &debug_rendering, &debug_font_fallback);
     global_state.is_wayland = is_wayland ? true : false;
 #ifdef __APPLE__
     global_state.has_render_frames = true;
 #endif
     if (global_state.is_wayland) global_state.has_render_frames = true;
-    global_state.debug_gl = debug_gl ? true : false;
+    global_state.debug_rendering = debug_rendering ? true : false;
     global_state.debug_font_fallback = debug_font_fallback ? true : false;
 #define GA(name) ret = PyObject_GetAttrString(opts, #name); if (ret == NULL) return NULL;
 #define SS(name, dest, convert) { GA(name); dest = convert(ret); Py_DECREF(ret); if (PyErr_Occurred()) return NULL; }
@@ -603,7 +615,6 @@ PYWRAP1(set_options) {
     S(dim_opacity, PyFloat_AsFloat);
     S(dynamic_background_opacity, PyObject_IsTrue);
     S(inactive_text_alpha, PyFloat_AsFloat);
-    S(window_padding_width, PyFloat_AsFloat);
     S(scrollback_pager_history_size, PyLong_AsUnsignedLong);
     S(cursor_shape, PyLong_AsLong);
     S(cursor_beam_thickness, PyFloat_AsFloat);
@@ -837,6 +848,16 @@ fix_window_idx(Tab *tab, id_type window_id, unsigned int *window_idx) {
         if (tab->windows[fix].id == window_id) { *window_idx = fix; return true; }
     }
     return false;
+}
+
+PYWRAP1(set_window_padding) {
+    id_type os_window_id, tab_id, window_id;
+    unsigned int left, top, right, bottom;
+    PA("KKKIIII", &os_window_id, &tab_id, &window_id, &left, &top, &right, &bottom);
+    WITH_WINDOW(os_window_id, tab_id, window_id);
+        window->padding.left = left; window->padding.top = top; window->padding.right = right; window->padding.bottom = bottom;
+    END_WITH_WINDOW;
+    Py_RETURN_NONE;
 }
 
 PYWRAP1(set_window_render_data) {
@@ -1080,6 +1101,7 @@ static PyMethodDef module_methods[] = {
     MW(add_borders_rect, METH_VARARGS),
     MW(set_tab_bar_render_data, METH_VARARGS),
     MW(set_window_render_data, METH_VARARGS),
+    MW(set_window_padding, METH_VARARGS),
     MW(viewport_for_window, METH_VARARGS),
     MW(cell_size_for_window, METH_VARARGS),
     MW(os_window_has_background_image, METH_VARARGS),

@@ -328,6 +328,10 @@ FC_WIDTH_NORMAL: int
 FC_SLANT_ROMAN: int
 FC_SLANT_ITALIC: int
 BORDERS_PROGRAM: int
+PRESS: int
+RELEASE: int
+DRAG: int
+MOVE: int
 # }}}
 
 
@@ -550,7 +554,7 @@ def update_window_visibility(
 def set_options(
     opts: Options,
     is_wayland: bool = False,
-    debug_gl: bool = False,
+    debug_rendering: bool = False,
     debug_font_fallback: bool = False
 ) -> None:
     pass
@@ -1132,4 +1136,8 @@ def spawn(
 
 
 def key_to_bytes(glfw_key: int, smkx: bool, extended: bool, mods: int, action: int) -> bytes:
+    pass
+
+
+def set_window_padding(os_window_id: int, tab_id: int, window_id: int, left: int, top: int, right: int, bottom: int) -> None:
     pass

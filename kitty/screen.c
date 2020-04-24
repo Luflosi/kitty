@@ -357,10 +357,46 @@ selection_has_screen_line(Selection *s, int y) {
     return top <= y && y <= bottom;
 }
 
+static inline bool is_flag_pair(char_type a, char_type b) {
+    return is_flag_codepoint(a) && is_flag_codepoint(b);
+}
+
+static inline bool
+draw_second_flag_codepoint(Screen *self, char_type ch) {
+    index_type xpos = 0, ypos = 0;
+    if (self->cursor->x > 1) {
+        ypos = self->cursor->y;
+        xpos = self->cursor->x - 2;
+    } else if (self->cursor->y > 0 && self->columns > 1) {
+        ypos = self->cursor->y - 1;
+        xpos = self->columns - 2;
+    } else return false;
+
+    linebuf_init_line(self->linebuf, ypos);
+    CPUCell *cell = self->linebuf->line->cpu_cells + xpos;
+    if (!is_flag_pair(cell->ch, ch) || cell->cc_idx[0]) return false;
+    line_add_combining_char(self->linebuf->line, ch, xpos);
+    self->is_dirty = true;
+    if (selection_has_screen_line(&self->selection, ypos)) self->selection = EMPTY_SELECTION;
+    linebuf_mark_line_dirty(self->linebuf, ypos);
+    return true;
+}
+
 static inline void
 draw_combining_char(Screen *self, char_type ch) {
     bool has_prev_char = false;
     index_type xpos = 0, ypos = 0;
+    if (self->cursor->x > 0) {
+        ypos = self->cursor->y;
+        linebuf_init_line(self->linebuf, ypos);
+        xpos = self->cursor->x - 1;
+        has_prev_char = true;
+    } else if (self->cursor->y > 0) {
+        ypos = self->cursor->y - 1;
+        linebuf_init_line(self->linebuf, ypos);
+        xpos = self->columns - 1;
+        has_prev_char = true;
+    }
     if (self->cursor->x > 0) {
         ypos = self->cursor->y;
         linebuf_init_line(self->linebuf, ypos);
@@ -411,6 +447,10 @@ screen_draw(Screen *self, uint32_t och) {
     if (UNLIKELY(is_cc)) {
         draw_combining_char(self, ch);
         return;
+    }
+    bool is_flag = is_flag_codepoint(ch);
+    if (UNLIKELY(is_flag)) {
+        if (draw_second_flag_codepoint(self, ch)) return;
     }
     int char_width = wcwidth_std(ch);
     if (UNLIKELY(char_width < 1)) {
@@ -1827,37 +1867,54 @@ screen_wcswidth(PyObject UNUSED *self, PyObject *str) {
     unsigned long ans = 0;
     char_type prev_ch = 0;
     int prev_width = 0;
-    bool in_sgr = false;
+    typedef enum {NORMAL, IN_SGR, FLAG_PAIR_STARTED} WCSState;
+    WCSState state = NORMAL;
     for (i = 0; i < len; i++) {
         char_type ch = PyUnicode_READ(kind, data, i);
-        if (in_sgr) {
-            if (ch == 'm') in_sgr = false;
-            continue;
-        }
-        if (ch == 0x1b && i + 1 < len && PyUnicode_READ(kind, data, i + 1) == '[') { in_sgr = true; continue; }
-        if (ch == 0xfe0f) {
-            if (is_emoji_presentation_base(prev_ch) && prev_width == 1) {
-                ans += 1;
-                prev_width = 2;
-            } else prev_width = 0;
-        } else if (ch == 0xfe0e) {
-            if (is_emoji_presentation_base(prev_ch) && prev_width == 2) {
-                ans -= 1;
-                prev_width = 1;
-            } else prev_width = 0;
-        } else {
-            int w = wcwidth_std(ch);
-            switch(w) {
-                case -1:
-                case 0:
-                    prev_width = 0; break;
-                case 2:
-                    prev_width = 2; break;
-                default:
-                    prev_width = 1; break;
-            }
-            ans += prev_width;
-        }
+        switch(state) {
+            case IN_SGR: {
+                if (ch == 'm') state = NORMAL;
+            } continue;
+
+            case FLAG_PAIR_STARTED: {
+                state = NORMAL;
+                if (is_flag_pair(prev_ch, ch)) break;
+            } /* fallthrough */
+
+            case NORMAL: {
+                if (ch == 0x1b && i + 1 < len && PyUnicode_READ(kind, data, i + 1) == '[') { state = IN_SGR; continue; }
+                switch(ch) {
+                    case 0xfe0f: {
+                        if (is_emoji_presentation_base(prev_ch) && prev_width == 1) {
+                            ans += 1;
+                            prev_width = 2;
+                        } else prev_width = 0;
+                    } break;
+
+                    case 0xfe0e: {
+                        if (is_emoji_presentation_base(prev_ch) && prev_width == 2) {
+                            ans -= 1;
+                            prev_width = 1;
+                        } else prev_width = 0;
+                    } break;
+
+                    default: {
+                        if (is_flag_codepoint(ch)) state = FLAG_PAIR_STARTED;
+                        int w = wcwidth_std(ch);
+                        switch(w) {
+                            case -1:
+                            case 0:
+                                prev_width = 0; break;
+                            case 2:
+                                prev_width = 2; break;
+                            default:
+                                prev_width = 1; break;
+                        }
+                        ans += prev_width;
+                    } break;
+                } break; // switch(ch)
+            } break;  // case NORMAL
+        } // switch(state)
         prev_ch = ch;
     }
     return PyLong_FromUnsignedLong(ans);

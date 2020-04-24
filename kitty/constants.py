@@ -20,11 +20,25 @@ class Version(NamedTuple):
 
 
 appname: str = 'kitty'
-version: Version = Version(0, 17, 2)
+version: Version = Version(0, 17, 3)
 str_version: str = '.'.join(map(str, version))
 _plat = sys.platform.lower()
 is_macos: bool = 'darwin' in _plat
 base = os.path.dirname(os.path.abspath(__file__))
+
+
+class Edges(NamedTuple):
+    left: int = 0
+    top: int = 0
+    right: int = 0
+    bottom: int = 0
+
+
+class FloatEdges(NamedTuple):
+    left: float = 0
+    top: float = 0
+    right: float = 0
+    bottom: float = 0
 
 
 class ScreenGeometry(NamedTuple):
@@ -43,6 +57,7 @@ class WindowGeometry(NamedTuple):
     bottom: int
     xnum: int
     ynum: int
+    spaces: Edges = Edges()
 
 
 @lru_cache(maxsize=2)
