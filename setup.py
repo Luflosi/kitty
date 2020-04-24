@@ -891,9 +891,9 @@ def create_minimal_macos_bundle(args: Options, where: str) -> None:
     resources_dir = os.path.join(where, 'kitty.app/Contents/Resources')
     os.makedirs(resources_dir)
     os.makedirs(bin_dir)
+    build_launcher(args, bin_dir)
     with open(os.path.join(where, 'kitty.app/Contents/Info.plist'), 'wb') as f:
         f.write(macos_info_plist())
-    build_launcher(args, bin_dir)
     os.symlink(
         os.path.join(os.path.relpath(bin_dir, where), appname),
         os.path.join(where, appname))
