@@ -18,7 +18,7 @@ from .constants import appname, is_macos, is_wayland
 from .fast_data_types import (
     add_tab, attach_window, detach_window, get_boss, mark_tab_bar_dirty,
     next_window_id, remove_tab, remove_window, ring_bell, set_active_tab,
-    swap_tabs, x11_window_id
+    swap_tabs, sync_os_window_title, x11_window_id
 )
 from .layout import (
     Layout, Rect, create_layout_object_for, evict_cached_layouts
@@ -138,6 +138,7 @@ class Tab:  # {{{
         self._last_used_layout = self._current_layout_name
         self.current_layout = self.create_layout_object(layout_name)
         self._current_layout_name = layout_name
+        self.mark_tab_bar_dirty()
 
     def startup(self, session_tab: 'SessionTab') -> None:
         for cmd in session_tab.windows:
@@ -183,10 +184,13 @@ class Tab:  # {{{
                 old_active_window.focus_changed(False)
             if new_active_window is not None:
                 new_active_window.focus_changed(True)
-            tm = self.tab_manager_ref()
-            if tm is not None:
-                self.relayout_borders()
-                tm.mark_tab_bar_dirty()
+            self.relayout_borders()
+            self.mark_tab_bar_dirty()
+
+    def mark_tab_bar_dirty(self) -> None:
+        tm = self.tab_manager_ref()
+        if tm is not None:
+            tm.mark_tab_bar_dirty()
 
     @property
     def active_window(self) -> Optional[Window]:
@@ -206,7 +210,7 @@ class Tab:  # {{{
         if window is self.active_window:
             tm = self.tab_manager_ref()
             if tm is not None:
-                tm.mark_tab_bar_dirty()
+                tm.title_changed(self)
 
     def on_bell(self, window: Window) -> None:
         tm = self.tab_manager_ref()
@@ -330,6 +334,7 @@ class Tab:  # {{{
     def _add_window(self, window: Window, location: Optional[str] = None) -> None:
         self.active_window_idx = self.current_layout.add_window(self.windows, window, self.active_window_idx, location)
         self.relayout_borders()
+        self.mark_tab_bar_dirty()
 
     def new_window(
         self,
@@ -431,6 +436,7 @@ class Tab:  # {{{
         else:
             self.active_window_idx = active_window_idx
         self.relayout_borders()
+        self.mark_tab_bar_dirty()
         active_window = self.active_window
         if active_window:
             self.title_changed(active_window)
@@ -639,6 +645,11 @@ class TabManager:  # {{{
     def update_tab_bar_data(self) -> None:
         self.tab_bar.update(self.tab_bar_data)
 
+    def title_changed(self, tab: Tab) -> None:
+        self.mark_tab_bar_dirty()
+        if tab is self.active_tab:
+            sync_os_window_title(self.os_window_id)
+
     def resize(self, only_tabs: bool = False) -> None:
         if not only_tabs:
             if not self.tab_bar_hidden:
@@ -799,7 +810,10 @@ class TabManager:  # {{{
                 if w.needs_attention:
                     needs_attention = True
                     break
-            ans.append(TabBarData(title, t is at, needs_attention))
+            ans.append(TabBarData(
+                title, t is at, needs_attention,
+                len(t), t.current_layout.name or ''
+            ))
         return ans
 
     def activate_tab_at(self, x: int) -> None:

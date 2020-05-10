@@ -524,17 +524,6 @@ change_menubar_title(PyObject *title UNUSED) {
 }
 
 static inline bool
-update_window_title(Window *w, OSWindow *os_window) {
-    if (w->title && w->title != os_window->window_title) {
-        os_window->window_title = w->title;
-        Py_INCREF(os_window->window_title);
-        set_os_window_title(os_window, PyUnicode_AsUTF8(w->title));
-        return true;
-    }
-    return false;
-}
-
-static inline bool
 prepare_to_render_os_window(OSWindow *os_window, monotonic_t now, unsigned int *active_window_id, color_type *active_window_bg, unsigned int *num_visible_windows, bool *all_windows_have_same_bg) {
 #define TD os_window->tab_bar_render_data
     bool needs_render = os_window->needs_render;
@@ -577,7 +566,7 @@ prepare_to_render_os_window(OSWindow *os_window, monotonic_t now, unsigned int *
                 *active_window_id = w->id;
                 collect_cursor_info(&WD.screen->cursor_render_info, w, now, os_window);
                 if (w->cursor_visible_at_last_render != WD.screen->cursor_render_info.is_visible || w->last_cursor_x != WD.screen->cursor_render_info.x || w->last_cursor_y != WD.screen->cursor_render_info.y || w->last_cursor_shape != WD.screen->cursor_render_info.shape) needs_render = true;
-                update_window_title(w, os_window);
+                set_os_window_title_from_window(w, os_window);
                 *active_window_bg = window_bg;
             } else WD.screen->cursor_render_info.is_visible = false;
             if (send_cell_data_to_gpu(WD.vao_idx, WD.gvao_idx, WD.xstart, WD.ystart, WD.dx, WD.dy, WD.screen, os_window)) needs_render = true;
@@ -623,15 +612,6 @@ render_os_window(OSWindow *os_window, monotonic_t now, unsigned int active_windo
     if (USE_RENDER_FRAMES) request_frame_render(os_window);
 #undef WD
 #undef TD
-}
-
-static inline void
-update_os_window_title(OSWindow *os_window) {
-    Tab *tab = os_window->tabs + os_window->active_tab;
-    if (tab->num_windows) {
-        Window *w = tab->windows + tab->active_window;
-        update_window_title(w, os_window);
-    }
 }
 
 static void
@@ -865,25 +845,42 @@ process_pending_resizes(monotonic_t now) {
 
 static inline void
 close_all_windows(void) {
-    for (size_t w = 0; w < global_state.num_os_windows; w++) mark_os_window_for_close(&global_state.os_windows[w], true);
+    for (size_t w = 0; w < global_state.num_os_windows; w++) mark_os_window_for_close(&global_state.os_windows[w], IMPERATIVE_CLOSE_REQUESTED);
+}
+
+static inline void
+close_os_window(ChildMonitor *self, OSWindow *os_window) {
+    destroy_os_window(os_window);
+    call_boss(on_os_window_closed, "Kii", os_window->id, os_window->window_width, os_window->window_height);
+    for (size_t t=0; t < os_window->num_tabs; t++) {
+        Tab *tab = os_window->tabs + t;
+        for (size_t w = 0; w < tab->num_windows; w++) mark_child_for_close(self, tab->windows[w].id);
+    }
+    remove_os_window(os_window->id);
 }
 
 static inline bool
 process_pending_closes(ChildMonitor *self) {
-    global_state.has_pending_closes = false;
     bool has_open_windows = false;
     for (size_t w = global_state.num_os_windows; w > 0; w--) {
         OSWindow *os_window = global_state.os_windows + w - 1;
-        if (should_os_window_close(os_window)) {
-            destroy_os_window(os_window);
-            call_boss(on_os_window_closed, "Kii", os_window->id, os_window->window_width, os_window->window_height);
-            for (size_t t=0; t < os_window->num_tabs; t++) {
-                Tab *tab = os_window->tabs + t;
-                for (size_t w = 0; w < tab->num_windows; w++) mark_child_for_close(self, tab->windows[w].id);
-            }
-            remove_os_window(os_window->id);
-        } else has_open_windows = true;
+        switch(os_window->close_request) {
+            case NO_CLOSE_REQUESTED:
+                has_open_windows = true;
+                break;
+            case CONFIRMABLE_CLOSE_REQUESTED:
+                os_window->close_request = NO_CLOSE_REQUESTED;
+                call_boss(confirm_os_window_close, "K", os_window->id);
+                if (os_window->close_request == IMPERATIVE_CLOSE_REQUESTED) {
+                    close_os_window(self, os_window);
+                } else has_open_windows = true;
+                break;
+            case IMPERATIVE_CLOSE_REQUESTED:
+                close_os_window(self, os_window);
+                break;
+        }
     }
+    global_state.has_pending_closes = false;
 #ifdef __APPLE__
     if (!OPT(macos_quit_when_last_window_closed)) {
         if (!has_open_windows && !application_quit_requested()) has_open_windows = true;
@@ -1280,7 +1277,7 @@ typedef struct {
     char *data;
     size_t capacity, used;
     int fd;
-    bool finished, close_socket;
+    bool finished, close_socket, is_peer_command;
 } PeerReadData;
 static PeerReadData empty_prd = {.fd = -1, 0};
 
@@ -1330,6 +1327,41 @@ accept_peer(int listen_fd, bool shutting_down) {
     return true;
 }
 
+#define KITTY_CMD_PREFIX "\x1bP@kitty-cmd{"
+
+static inline void
+queue_peer_message(ChildMonitor *self, char *buf, size_t sz, int fd) {
+    children_mutex(lock);
+    ensure_space_for(self, messages, Message, self->messages_count + 1, messages_capacity, 16, true);
+    Message *m = self->messages + self->messages_count++;
+    m->data = buf; m->sz = sz; m->fd = fd;
+    children_mutex(unlock);
+    wakeup_main_loop();
+}
+
+static inline void
+dispatch_peer_command(ChildMonitor *self, PeerReadData *rd, int fd) {
+    size_t end = 0;
+    for (size_t i = 0; i < rd->used - 1; i++) {
+        if (rd->data[i] == 0x1b && rd->data[i+1] == '\\') {
+            end = i + 2;
+            break;
+        }
+    }
+    if (!end) return;
+    char *buf = malloc(end + 8);
+    if (buf) {
+        memcpy(buf, rd->data, end);
+        queue_peer_message(self, buf, end, fd);
+    }
+    rd->is_peer_command = false;
+    if (rd->used > end) {
+        rd->used -= end;
+        memmove(rd->data, rd->data + end, rd->used);
+        if (rd->used >= sizeof(KITTY_CMD_PREFIX) - 1 && memcmp(rd->data, KITTY_CMD_PREFIX, sizeof(KITTY_CMD_PREFIX)-1) == 0) rd->is_peer_command = true;
+    } else rd->used = 0;
+}
+
 static inline bool
 read_from_peer(ChildMonitor *self, int s) {
     bool read_finished = false;
@@ -1338,26 +1370,28 @@ read_from_peer(ChildMonitor *self, int s) {
 #define failed(msg) { read_finished = true; log_error("%s", msg); rd->finished = true; rd->close_socket = true; break; }
         if (rd->fd == s) {
             if (rd->used >= rd->capacity) {
-                if (rd->capacity >= 1024 * 1024) failed("Ignoring too large message from peer");
+                if (rd->capacity >= 64 * 1024) failed("Ignoring too large message from peer");
                 rd->capacity = MAX(8192u, rd->capacity * 2);
                 rd->data = realloc(rd->data, rd->capacity);
                 if (!rd->data) failed("Out of memory");
             }
             ssize_t n = recv(s, rd->data + rd->used, rd->capacity - rd->used, 0);
             if (n == 0) {
+                while (rd->is_peer_command) dispatch_peer_command(self, rd, s);
                 read_finished = true; rd->finished = true;
-                children_mutex(lock);
-                ensure_space_for(self, messages, Message, self->messages_count + 1, messages_capacity, 16, true);
-                Message *m = self->messages + self->messages_count++;
-                m->data = rd->data; rd->data = NULL; m->sz = rd->used; m->fd = s;
-                children_mutex(unlock);
-                wakeup_main_loop();
+                if (rd->used) queue_peer_message(self, rd->data, rd->used, s);
+                else free(rd->data);
+                rd->data = NULL;
             } else if (n < 0) {
                 if (errno != EINTR) {
                     perror("Error reading from talk peer");
                     failed("");
                 }
-            } else rd->used += n;
+            } else {
+                if (!rd->used && memcmp(rd->data, KITTY_CMD_PREFIX, sizeof(KITTY_CMD_PREFIX)-1) == 0) rd->is_peer_command = true;
+                rd->used += n;
+                while (rd->is_peer_command) dispatch_peer_command(self, rd, s);
+            }
             break;
         }
     }

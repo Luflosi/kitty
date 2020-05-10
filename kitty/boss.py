@@ -339,7 +339,13 @@ class Boss:
                 if not getattr(err, 'hide_traceback', False):
                     response['tb'] = traceback.format_exc()
         else:
-            response = {'ok': False, 'error': 'Remote control is disabled. Add allow_remote_control to your kitty.conf'}
+            no_response = False
+            try:
+                no_response = json.loads(cmd).get('no_response')
+            except Exception:
+                pass
+            if not no_response:
+                response = {'ok': False, 'error': 'Remote control is disabled. Add allow_remote_control to your kitty.conf'}
         return response
 
     def remote_control(self, *args: str) -> None:
@@ -358,15 +364,16 @@ class Boss:
             self.show_error(_('remote_control mapping failed'), str(e))
 
     def peer_message_received(self, msg_bytes: bytes) -> Optional[bytes]:
-        msg = msg_bytes.decode('utf-8')
-        cmd_prefix = '\x1bP@kitty-cmd'
-        if msg.startswith(cmd_prefix):
-            cmd = msg[len(cmd_prefix):-2]
+        cmd_prefix = b'\x1bP@kitty-cmd'
+        terminator = b'\x1b\\'
+        if msg_bytes.startswith(cmd_prefix) and msg_bytes.endswith(terminator):
+            cmd = msg_bytes[len(cmd_prefix):-len(terminator)].decode('utf-8')
             response = self._handle_remote_command(cmd, from_peer=True)
             if response is None:
                 return None
-            return (cmd_prefix + json.dumps(response) + '\x1b\\').encode('utf-8')
-        data = json.loads(msg)
+            return cmd_prefix + json.dumps(response).encode('utf-8') + terminator
+
+        data = json.loads(msg_bytes.decode('utf-8'))
         if isinstance(data, dict) and data.get('cmd') == 'new_instance':
             from .cli_stub import CLIOptions
             startup_id = data.get('startup_id')
@@ -719,6 +726,9 @@ class Boss:
                 if mime == 'text/uri-list':
                     text = '\n'.join(parse_uri_list(text))
                 w.paste(text)
+
+    def confirm_os_window_close(self, os_window_id: int) -> None:
+        mark_os_window_for_close(os_window_id)
 
     def on_os_window_closed(self, os_window_id: int, viewport_width: int, viewport_height: int) -> None:
         self.cached_values['window-size'] = viewport_width, viewport_height

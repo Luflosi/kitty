@@ -548,7 +548,7 @@ rectangular block with the mouse)'''))
 o('terminal_select_modifiers', 'shift', option_type=to_modifiers, long_text=_('''
 The modifiers to override mouse selection even when a terminal application has grabbed the mouse'''))
 
-o('select_by_word_characters', ':@-./_~?&=%+#', long_text=_('''
+o('select_by_word_characters', '@-./_~?&=%+#', long_text=_('''
 Characters considered part of a word when double clicking. In addition to these characters
 any character that is marked as an alphanumeric character in the unicode
 database will be matched.'''))
@@ -870,6 +870,11 @@ A template to render the tab title. The default just renders
 the title. If you wish to include the tab-index as well,
 use something like: :code:`{index}: {title}`. Useful
 if you have shortcuts mapped for :code:`goto_tab N`.
+In addition you can use :code:`{layout_name}` for the current
+layout name and :code:`{num_windows}` for the number of windows
+in the tab. Note that formatting is done by Python's string formatting
+machinery, so you can use, for instance, :code:`{layout_name[:2].upper()}` to
+show only the first two letters of the layout name, upper-cased.
 '''))
 o('active_tab_title_template', 'none', option_type=active_tab_title_template, long_text=_('''
 Template to use for active tabs, if not specified falls back

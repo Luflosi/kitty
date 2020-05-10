@@ -153,6 +153,10 @@ static void
 window_close_callback(GLFWwindow* window) {
     if (!set_callback_window(window)) return;
     global_state.has_pending_closes = true;
+    if (global_state.callback_os_window->close_request < CONFIRMABLE_CLOSE_REQUESTED) {
+        global_state.callback_os_window->close_request = CONFIRMABLE_CLOSE_REQUESTED;
+    }
+    glfwSetWindowShouldClose(window, false);
     request_tick_callback();
     global_state.callback_os_window = NULL;
 }
@@ -287,12 +291,12 @@ cursor_pos_callback(GLFWwindow *w, double x, double y) {
 }
 
 static void
-scroll_callback(GLFWwindow *w, double xoffset, double yoffset, int flags) {
+scroll_callback(GLFWwindow *w, double xoffset, double yoffset, int flags, int mods) {
     if (!set_callback_window(w)) return;
     show_mouse_cursor(w);
     monotonic_t now = monotonic();
     global_state.callback_os_window->last_mouse_activity_at = now;
-    if (is_window_ready_for_callbacks()) scroll_event(xoffset, yoffset, flags);
+    if (is_window_ready_for_callbacks()) scroll_event(xoffset, yoffset, flags, mods);
     request_tick_callback();
     global_state.callback_os_window = NULL;
 }
@@ -323,23 +327,17 @@ window_focus_callback(GLFWwindow *w, int focused) {
 static int
 drop_callback(GLFWwindow *w, const char *mime, const char *data, size_t sz) {
     if (!set_callback_window(w)) return 0;
+#define RETURN(x) { global_state.callback_os_window = NULL; return x; }
     if (!data) {
-        if (strcmp(mime, "text/uri-list") == 0) return 3;
-        if (strcmp(mime, "text/plain;charset=utf-8") == 0) return 2;
-        if (strcmp(mime, "text/plain") == 0) return 1;
-        return 0;
+        if (strcmp(mime, "text/uri-list") == 0) RETURN(3);
+        if (strcmp(mime, "text/plain;charset=utf-8") == 0) RETURN(2);
+        if (strcmp(mime, "text/plain") == 0) RETURN(1);
+        RETURN(0);
     }
-    WINDOW_CALLBACK(on_drop, "sy#", mime, data, (int)sz);
+    WINDOW_CALLBACK(on_drop, "sy#", mime, data, (Py_ssize_t)sz);
     request_tick_callback();
-    /* PyObject *s = PyTuple_New(count); */
-    /* if (s) { */
-    /*     for (int i = 0; i < count; i++) PyTuple_SET_ITEM(s, i, PyUnicode_FromString(strings[i])); */
-    /*     WINDOW_CALLBACK(on_drop, "O", s); */
-    /*     Py_CLEAR(s); */
-    /*     request_tick_callback(); */
-    /* } */
-    global_state.callback_os_window = NULL;
-    return 0;
+    RETURN(0);
+#undef RETURN
 }
 
 // }}}
@@ -979,12 +977,6 @@ wakeup_main_loop() {
     glfwPostEmptyEvent();
 }
 
-void
-mark_os_window_for_close(OSWindow* w, bool yes) {
-    global_state.has_pending_closes = true;
-    glfwSetWindowShouldClose(w->handle, yes);
-}
-
 bool
 should_os_window_be_rendered(OSWindow* w) {
     return (
@@ -992,11 +984,6 @@ should_os_window_be_rendered(OSWindow* w) {
             !glfwGetWindowAttrib(w->handle, GLFW_VISIBLE) ||
             glfwGetWindowAttrib(w->handle, GLFW_OCCLUDED)
        ) ? false : true;
-}
-
-bool
-should_os_window_close(OSWindow* w) {
-    return glfwWindowShouldClose(w->handle) ? true : false;
 }
 
 static PyObject*

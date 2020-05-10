@@ -43,8 +43,9 @@ GlobalState global_state = {{0}};
                 if (osw->tabs[t].id == tab_id) { \
                     Tab *tab = osw->tabs + t; \
                     for (size_t w = 0; w < tab->num_windows; w++) { \
-                        Window *window = tab->windows + w;
-#define END_WITH_WINDOW break; }}}}}
+                        if (tab->windows[w].id == window_id) { \
+                            Window *window = tab->windows + w;
+#define END_WITH_WINDOW window_found = 1; break; }}}}}}
 
 
 #define WITH_OS_WINDOW_REFS \
@@ -211,6 +212,27 @@ update_window_title(id_type os_window_id, id_type tab_id, id_type window_id, PyO
         }
     }
     END_WITH_TAB;
+}
+
+void
+set_os_window_title_from_window(Window *w, OSWindow *os_window) {
+    if (w->title && w->title != os_window->window_title) {
+        Py_XDECREF(os_window->window_title);
+        os_window->window_title = w->title;
+        Py_INCREF(os_window->window_title);
+        set_os_window_title(os_window, PyUnicode_AsUTF8(w->title));
+    }
+}
+
+void
+update_os_window_title(OSWindow *os_window) {
+    if (os_window->num_tabs) {
+        Tab *tab = os_window->tabs + os_window->active_tab;
+        if (tab->num_windows) {
+            Window *w = tab->windows + tab->active_window;
+            set_os_window_title_from_window(w, os_window);
+        }
+    }
 }
 
 static inline void
@@ -421,6 +443,14 @@ os_window_regions(OSWindow *os_window, Region *central, Region *tab_bar) {
         central->bottom = os_window->viewport_height - 1;
     }
 }
+
+void
+mark_os_window_for_close(OSWindow* w, CloseRequest cr) {
+    global_state.has_pending_closes = true;
+    w->close_request = cr;
+}
+
+
 
 
 // Python API {{{
@@ -783,10 +813,10 @@ PYWRAP1(os_window_has_background_image) {
 
 PYWRAP1(mark_os_window_for_close) {
     id_type os_window_id;
-    int yes = 1;
-    PA("K|p", &os_window_id, &yes);
+    CloseRequest cr = IMPERATIVE_CLOSE_REQUESTED;
+    PA("K|i", &os_window_id, &cr);
     WITH_OS_WINDOW(os_window_id)
-        mark_os_window_for_close(os_window, yes ? true : false);
+        mark_os_window_for_close(os_window, cr);
         Py_RETURN_TRUE;
     END_WITH_OS_WINDOW
     Py_RETURN_FALSE;
@@ -898,6 +928,17 @@ PYWRAP1(update_window_visibility) {
     END_WITH_TAB;
     Py_RETURN_NONE;
 }
+
+
+PYWRAP1(sync_os_window_title) {
+    id_type os_window_id;
+    PA("K", &os_window_id);
+    WITH_OS_WINDOW(os_window_id)
+        update_os_window_title(os_window);
+    END_WITH_OS_WINDOW
+    Py_RETURN_NONE;
+}
+
 
 static inline double
 dpi_for_os_window_id(id_type os_window_id) {
@@ -1112,6 +1153,7 @@ static PyMethodDef module_methods[] = {
     MW(change_background_opacity, METH_VARARGS),
     MW(background_opacity_of, METH_O),
     MW(update_window_visibility, METH_VARARGS),
+    MW(sync_os_window_title, METH_VARARGS),
     MW(global_font_size, METH_VARARGS),
     MW(set_background_image, METH_VARARGS),
     MW(os_window_font_size, METH_VARARGS),
