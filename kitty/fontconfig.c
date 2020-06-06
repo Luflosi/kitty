@@ -84,7 +84,7 @@ font_set(FcFontSet *fs) {
 
 static PyObject*
 fc_list(PyObject UNUSED *self, PyObject *args) {
-    int allow_bitmapped_fonts = 0, spacing = -1;
+    int allow_bitmapped_fonts = 1, spacing = -1;
     PyObject *ans = NULL;
     FcObjectSet *os = NULL;
     FcPattern *pat = NULL;
@@ -148,7 +148,7 @@ end:
 static PyObject*
 fc_match(PyObject UNUSED *self, PyObject *args) {
     char *family = NULL;
-    int bold = 0, italic = 0, allow_bitmapped_fonts = 0, spacing = FC_MONO;
+    int bold = 0, italic = 0, allow_bitmapped_fonts = 1, spacing = FC_MONO;
     double size_in_pts = 0, dpi = 0;
     FcPattern *pat = NULL;
     PyObject *ans = NULL;
