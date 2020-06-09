@@ -29,7 +29,7 @@ profile:
 	python3 setup.py build $(VVAL) --profile
 
 app:
-	python3 setup.py app $(VVAL)
+	python3 setup.py app $(VVAL) --debug
 
 man:
 	$(MAKE) FAIL_WARN=$(FAIL_WARN) -C docs man
