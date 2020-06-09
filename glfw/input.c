@@ -695,6 +695,8 @@ GLFWAPI int glfwGetInputMode(GLFWwindow* handle, int mode)
             return window->stickyMouseButtons;
         case GLFW_LOCK_KEY_MODS:
             return window->lockKeyMods;
+        case GLFW_RAW_MOUSE_MOTION:
+            return window->rawMouseMotion;
     }
 
     _glfwInputError(GLFW_INVALID_ENUM, "Invalid input mode 0x%08X", mode);
@@ -774,8 +776,30 @@ GLFWAPI void glfwSetInputMode(GLFWwindow* handle, int mode, int value)
     {
         window->lockKeyMods = value ? true : false;
     }
+    else if (mode == GLFW_RAW_MOUSE_MOTION)
+    {
+        if (!_glfwPlatformRawMouseMotionSupported())
+        {
+            _glfwInputError(GLFW_PLATFORM_ERROR,
+                            "Raw mouse motion is not supported on this system");
+            return;
+        }
+
+        value = value ? true : false;
+        if (window->rawMouseMotion == value)
+            return;
+
+        window->rawMouseMotion = value;
+        _glfwPlatformSetRawMouseMotion(window, value);
+    }
     else
         _glfwInputError(GLFW_INVALID_ENUM, "Invalid input mode 0x%08X", mode);
+}
+
+GLFWAPI int glfwRawMouseMotionSupported(void)
+{
+    _GLFW_REQUIRE_INIT_OR_RETURN(false);
+    return _glfwPlatformRawMouseMotionSupported();
 }
 
 GLFWAPI const char* glfwGetKeyName(int key, int native_key)
@@ -1432,8 +1456,18 @@ GLFWAPI int glfwGetGamepadState(int jid, GLFWgamepadstate* state)
         if (e->type == _GLFW_JOYSTICK_AXIS)
         {
             const float value = js->axes[e->index] * e->axisScale + e->axisOffset;
-            if (value > 0.f)
-                state->buttons[i] = GLFW_PRESS;
+            // HACK: This should be baked into the value transform
+            // TODO: Bake into transform when implementing output modifiers
+            if (e->axisOffset < 0 || (e->axisOffset == 0 && e->axisScale > 0))
+            {
+                if (value >= 0.f)
+                    state->buttons[i] = GLFW_PRESS;
+            }
+            else
+            {
+                if (value <= 0.f)
+                    state->buttons[i] = GLFW_PRESS;
+            }
         }
         else if (e->type == _GLFW_JOYSTICK_HATBIT)
         {

@@ -243,7 +243,16 @@ destroy_window(Window *w) {
 
 static inline void
 remove_window_inner(Tab *tab, id_type id) {
+    id_type active_window_id = 0;
+    if (tab->active_window < tab->num_windows) active_window_id = tab->windows[tab->active_window].id;
     REMOVER(tab->windows, id, tab->num_windows, destroy_window, tab->capacity);
+    if (active_window_id) {
+        for (unsigned int w = 0; w < tab->num_windows; w++) {
+            if (tab->windows[w].id == active_window_id) {
+                tab->active_window = w; break;
+            }
+        }
+    }
 }
 
 static inline void
@@ -329,8 +338,17 @@ destroy_tab(Tab *tab) {
 
 static inline void
 remove_tab_inner(OSWindow *os_window, id_type id) {
+    id_type active_tab_id = 0;
+    if (os_window->active_tab < os_window->num_tabs) active_tab_id = os_window->tabs[os_window->active_tab].id;
     make_os_window_context_current(os_window);
     REMOVER(os_window->tabs, id, os_window->num_tabs, destroy_tab, os_window->capacity);
+    if (active_tab_id) {
+        for (unsigned int i = 0; i < os_window->num_tabs; i++) {
+            if (os_window->tabs[i].id == active_tab_id) {
+                os_window->active_tab = i; break;
+            }
+        }
+    }
 }
 
 static inline void
@@ -382,11 +400,12 @@ set_active_tab(id_type os_window_id, unsigned int idx) {
 }
 
 static inline void
-set_active_window(id_type os_window_id, id_type tab_id, unsigned int idx) {
-    WITH_TAB(os_window_id, tab_id)
-        tab->active_window = idx;
+set_active_window(id_type os_window_id, id_type tab_id, id_type window_id) {
+    WITH_WINDOW(os_window_id, tab_id, window_id)
+        (void)window;
+        tab->active_window = w;
         osw->needs_render = true;
-    END_WITH_TAB;
+    END_WITH_WINDOW;
 }
 
 static inline void
@@ -396,15 +415,6 @@ swap_tabs(id_type os_window_id, unsigned int a, unsigned int b) {
         os_window->tabs[b] = os_window->tabs[a];
         os_window->tabs[a] = t;
     END_WITH_OS_WINDOW
-}
-
-static inline void
-swap_windows(id_type os_window_id, id_type tab_id, unsigned int a, unsigned int b) {
-    WITH_TAB(os_window_id, tab_id);
-    Window w = tab->windows[b];
-    tab->windows[b] = tab->windows[a];
-    tab->windows[a] = w;
-    END_WITH_TAB;
 }
 
 static void
@@ -452,7 +462,6 @@ mark_os_window_for_close(OSWindow* w, CloseRequest cr) {
 
 
 
-
 // Python API {{{
 #define PYWRAP0(name) static PyObject* py##name(PYNOARG)
 #define PYWRAP1(name) static PyObject* py##name(PyObject UNUSED *self, PyObject *args)
@@ -466,7 +475,9 @@ mark_os_window_for_close(OSWindow* w, CloseRequest cr) {
 #define KI(name) PYWRAP1(name) { id_type a; unsigned int b; PA("KI", &a, &b); name(a, b); Py_RETURN_NONE; }
 #define KII(name) PYWRAP1(name) { id_type a; unsigned int b, c; PA("KII", &a, &b, &c); name(a, b, c); Py_RETURN_NONE; }
 #define KKI(name) PYWRAP1(name) { id_type a, b; unsigned int c; PA("KKI", &a, &b, &c); name(a, b, c); Py_RETURN_NONE; }
+#define KKK(name) PYWRAP1(name) { id_type a, b, c; PA("KKK", &a, &b, &c); name(a, b, c); Py_RETURN_NONE; }
 #define KKII(name) PYWRAP1(name) { id_type a, b; unsigned int c, d; PA("KKII", &a, &b, &c, &d); name(a, b, c, d); Py_RETURN_NONE; }
+#define KKKK(name) PYWRAP1(name) { id_type a, b, c, d; PA("KKKK", &a, &b, &c, &d); name(a, b, c, d); Py_RETURN_NONE; }
 #define KK5I(name) PYWRAP1(name) { id_type a, b; unsigned int c, d, e, f, g; PA("KKIIIII", &a, &b, &c, &d, &e, &f, &g); name(a, b, c, d, e, f, g); Py_RETURN_NONE; }
 #define BOOL_SET(name) PYWRAP1(set_##name) { global_state.name = PyObject_IsTrue(args); Py_RETURN_NONE; }
 
@@ -822,6 +833,19 @@ PYWRAP1(mark_os_window_for_close) {
     Py_RETURN_FALSE;
 }
 
+PYWRAP1(set_application_quit_request) {
+    CloseRequest cr = IMPERATIVE_CLOSE_REQUESTED;
+    PA("|i", &cr);
+    global_state.quit_request = cr;
+    global_state.has_pending_closes = true;
+    request_tick_callback();
+    Py_RETURN_NONE;
+}
+
+PYWRAP0(current_application_quit_request) {
+    return Py_BuildValue("i", global_state.quit_request);
+}
+
 PYWRAP1(focus_os_window) {
     id_type os_window_id;
     int also_raise = 1;
@@ -872,14 +896,6 @@ PYWRAP1(background_opacity_of) {
     Py_RETURN_NONE;
 }
 
-static inline bool
-fix_window_idx(Tab *tab, id_type window_id, unsigned int *window_idx) {
-    for (id_type fix = 0; fix < tab->num_windows; fix++) {
-        if (tab->windows[fix].id == window_id) { *window_idx = fix; return true; }
-    }
-    return false;
-}
-
 PYWRAP1(set_window_padding) {
     id_type os_window_id, tab_id, window_id;
     unsigned int left, top, right, bottom;
@@ -894,22 +910,18 @@ PYWRAP1(set_window_render_data) {
 #define A(name) &(d.name)
 #define B(name) &(g.name)
     id_type os_window_id, tab_id, window_id;
-    unsigned int window_idx;
     ScreenRenderData d = {0};
     WindowGeometry g = {0};
-    PA("KKKIffffOIIII", &os_window_id, &tab_id, &window_id, &window_idx, A(xstart), A(ystart), A(dx), A(dy), A(screen), B(left), B(top), B(right), B(bottom));
+    PA("KKKffffOIIII", &os_window_id, &tab_id, &window_id, A(xstart), A(ystart), A(dx), A(dy), A(screen), B(left), B(top), B(right), B(bottom));
 
-    WITH_TAB(os_window_id, tab_id);
-        if (tab->windows[window_idx].id != window_id) {
-            if (!fix_window_idx(tab, window_id, &window_idx)) Py_RETURN_NONE;
-        }
-        Py_CLEAR(tab->windows[window_idx].render_data.screen);
-        d.vao_idx = tab->windows[window_idx].render_data.vao_idx;
-        d.gvao_idx = tab->windows[window_idx].render_data.gvao_idx;
-        tab->windows[window_idx].render_data = d;
-        tab->windows[window_idx].geometry = g;
-        Py_INCREF(tab->windows[window_idx].render_data.screen);
-    END_WITH_TAB;
+    WITH_WINDOW(os_window_id, tab_id, window_id);
+        Py_CLEAR(window->render_data.screen);
+        d.vao_idx = window->render_data.vao_idx;
+        d.gvao_idx = window->render_data.gvao_idx;
+        window->render_data = d;
+        window->geometry = g;
+        Py_INCREF(window->render_data.screen);
+    END_WITH_WINDOW;
     Py_RETURN_NONE;
 #undef A
 #undef B
@@ -917,15 +929,11 @@ PYWRAP1(set_window_render_data) {
 
 PYWRAP1(update_window_visibility) {
     id_type os_window_id, tab_id, window_id;
-    unsigned int window_idx;
     int visible;
-    PA("KKKIp", &os_window_id, &tab_id, &window_id, &window_idx, &visible);
-    WITH_TAB(os_window_id, tab_id);
-        if (tab->windows[window_idx].id != window_id) {
-            if (!fix_window_idx(tab, window_id, &window_idx)) Py_RETURN_NONE;
-        }
-        tab->windows[window_idx].visible = visible & 1;
-    END_WITH_TAB;
+    PA("KKKp", &os_window_id, &tab_id, &window_id, &visible);
+    WITH_WINDOW(os_window_id, tab_id, window_id);
+        window->visible = visible & 1;
+    END_WITH_WINDOW;
     Py_RETURN_NONE;
 }
 
@@ -1112,9 +1120,8 @@ PYWRAP1(add_window) { PyObject *title; id_type a, b; PA("KKO", &a, &b, &title); 
 PYWRAP0(current_os_window) { OSWindow *w = current_os_window(); if (!w) Py_RETURN_NONE; return PyLong_FromUnsignedLongLong(w->id); }
 TWO_ID(remove_tab)
 KI(set_active_tab)
-KKI(set_active_window)
+KKK(set_active_window)
 KII(swap_tabs)
-KKII(swap_windows)
 KK5I(add_borders_rect)
 
 #define M(name, arg_type) {#name, (PyCFunction)name, arg_type, NULL}
@@ -1138,7 +1145,6 @@ static PyMethodDef module_methods[] = {
     MW(set_active_tab, METH_VARARGS),
     MW(set_active_window, METH_VARARGS),
     MW(swap_tabs, METH_VARARGS),
-    MW(swap_windows, METH_VARARGS),
     MW(add_borders_rect, METH_VARARGS),
     MW(set_tab_bar_render_data, METH_VARARGS),
     MW(set_window_render_data, METH_VARARGS),
@@ -1147,6 +1153,8 @@ static PyMethodDef module_methods[] = {
     MW(cell_size_for_window, METH_VARARGS),
     MW(os_window_has_background_image, METH_VARARGS),
     MW(mark_os_window_for_close, METH_VARARGS),
+    MW(set_application_quit_request, METH_VARARGS),
+    MW(current_application_quit_request, METH_NOARGS),
     MW(set_titlebar_color, METH_VARARGS),
     MW(focus_os_window, METH_VARARGS),
     MW(mark_tab_bar_dirty, METH_O),
@@ -1196,6 +1204,9 @@ init_state(PyObject *module) {
     if (PyStructSequence_InitType2(&RegionType, &region_desc) != 0) return false;
     Py_INCREF((PyObject *) &RegionType);
     PyModule_AddObject(module, "Region", (PyObject *) &RegionType);
+    PyModule_AddIntConstant(module, "IMPERATIVE_CLOSE_REQUESTED", IMPERATIVE_CLOSE_REQUESTED);
+    PyModule_AddIntConstant(module, "NO_CLOSE_REQUESTED", NO_CLOSE_REQUESTED);
+    PyModule_AddIntConstant(module, "CLOSE_BEING_CONFIRMED", CLOSE_BEING_CONFIRMED);
     if (Py_AtExit(finalize) != 0) {
         PyErr_SetString(PyExc_RuntimeError, "Failed to register the state at exit handler");
         return false;

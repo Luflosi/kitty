@@ -429,6 +429,7 @@ struct _GLFWwindow
     char                keys[GLFW_KEY_LAST + 1];
     // Virtual cursor position when cursor is disabled
     double              virtualCursorPosX, virtualCursorPosY;
+    bool                rawMouseMotion;
 
     _GLFWcontext        context;
 
@@ -601,7 +602,9 @@ struct _GLFWlibrary
     struct {
         GLFWmonitorfun  monitor;
         GLFWjoystickfun joystick;
+        GLFWapplicationclosefun application_close;
     } callbacks;
+
 
     // This is defined in the window API's platform.h
     _GLFW_PLATFORM_LIBRARY_WINDOW_STATE;
@@ -631,6 +634,8 @@ const char* _glfwPlatformGetVersionString(void);
 void _glfwPlatformGetCursorPos(_GLFWwindow* window, double* xpos, double* ypos);
 void _glfwPlatformSetCursorPos(_GLFWwindow* window, double xpos, double ypos);
 void _glfwPlatformSetCursorMode(_GLFWwindow* window, int mode);
+void _glfwPlatformSetRawMouseMotion(_GLFWwindow *window, bool enabled);
+bool _glfwPlatformRawMouseMotionSupported(void);
 int _glfwPlatformCreateCursor(_GLFWcursor* cursor,
                               const GLFWimage* image, int xhot, int yhot, int count);
 int _glfwPlatformCreateStandardCursor(_GLFWcursor* cursor, GLFWCursorShape shape);

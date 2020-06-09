@@ -42,11 +42,11 @@
 #include <unistd.h>
 
 
-// Check whether the specified atom is supported
+// Return the atom ID only if it is listed in the specified array
 //
-static Atom getSupportedAtom(Atom* supportedAtoms,
-                             unsigned long atomCount,
-                             const char* atomName)
+static Atom getAtomIfSupported(Atom* supportedAtoms,
+                               unsigned long atomCount,
+                               const char* atomName)
 {
     const Atom atom = XInternAtom(_glfw.x11.display, atomName, False);
 
@@ -64,9 +64,8 @@ static Atom getSupportedAtom(Atom* supportedAtoms,
 static void detectEWMH(void)
 {
     // First we read the _NET_SUPPORTING_WM_CHECK property on the root window
-    Window* windowFromRoot = NULL;
 
-    // Then we look for the _NET_SUPPORTING_WM_CHECK property of the root window
+    Window* windowFromRoot = NULL;
     if (!_glfwGetWindowPropertyX11(_glfw.x11.root,
                                    _glfw.x11.NET_SUPPORTING_WM_CHECK,
                                    XA_WINDOW,
@@ -93,6 +92,7 @@ static void detectEWMH(void)
     _glfwReleaseErrorHandlerX11();
 
     // If the property exists, it should contain the XID of the window
+
     if (*windowFromRoot != *windowFromChild)
     {
         XFree(windowFromRoot);
@@ -103,49 +103,50 @@ static void detectEWMH(void)
     XFree(windowFromRoot);
     XFree(windowFromChild);
 
-    // We are now fairly sure that an EWMH-compliant window manager is running
+    // We are now fairly sure that an EWMH-compliant WM is currently running
     // We can now start querying the WM about what features it supports by
     // looking in the _NET_SUPPORTED property on the root window
     // It should contain a list of supported EWMH protocol and state atoms
 
     Atom* supportedAtoms = NULL;
-    const unsigned long atomCount = _glfwGetWindowPropertyX11(_glfw.x11.root,
-                                          _glfw.x11.NET_SUPPORTED,
-                                          XA_ATOM,
-                                          (unsigned char**) &supportedAtoms);
+    const unsigned long atomCount =
+        _glfwGetWindowPropertyX11(_glfw.x11.root,
+                                  _glfw.x11.NET_SUPPORTED,
+                                  XA_ATOM,
+                                  (unsigned char**) &supportedAtoms);
     if (!supportedAtoms)
         return;
 
     // See which of the atoms we support that are supported by the WM
 
     _glfw.x11.NET_WM_STATE =
-        getSupportedAtom(supportedAtoms, atomCount, "_NET_WM_STATE");
+        getAtomIfSupported(supportedAtoms, atomCount, "_NET_WM_STATE");
     _glfw.x11.NET_WM_STATE_ABOVE =
-        getSupportedAtom(supportedAtoms, atomCount, "_NET_WM_STATE_ABOVE");
+        getAtomIfSupported(supportedAtoms, atomCount, "_NET_WM_STATE_ABOVE");
     _glfw.x11.NET_WM_STATE_FULLSCREEN =
-        getSupportedAtom(supportedAtoms, atomCount, "_NET_WM_STATE_FULLSCREEN");
+        getAtomIfSupported(supportedAtoms, atomCount, "_NET_WM_STATE_FULLSCREEN");
     _glfw.x11.NET_WM_STATE_MAXIMIZED_VERT =
-        getSupportedAtom(supportedAtoms, atomCount, "_NET_WM_STATE_MAXIMIZED_VERT");
+        getAtomIfSupported(supportedAtoms, atomCount, "_NET_WM_STATE_MAXIMIZED_VERT");
     _glfw.x11.NET_WM_STATE_MAXIMIZED_HORZ =
-        getSupportedAtom(supportedAtoms, atomCount, "_NET_WM_STATE_MAXIMIZED_HORZ");
+        getAtomIfSupported(supportedAtoms, atomCount, "_NET_WM_STATE_MAXIMIZED_HORZ");
     _glfw.x11.NET_WM_STATE_DEMANDS_ATTENTION =
-        getSupportedAtom(supportedAtoms, atomCount, "_NET_WM_STATE_DEMANDS_ATTENTION");
+        getAtomIfSupported(supportedAtoms, atomCount, "_NET_WM_STATE_DEMANDS_ATTENTION");
     _glfw.x11.NET_WM_FULLSCREEN_MONITORS =
-        getSupportedAtom(supportedAtoms, atomCount, "_NET_WM_FULLSCREEN_MONITORS");
+        getAtomIfSupported(supportedAtoms, atomCount, "_NET_WM_FULLSCREEN_MONITORS");
     _glfw.x11.NET_WM_WINDOW_TYPE =
-        getSupportedAtom(supportedAtoms, atomCount, "_NET_WM_WINDOW_TYPE");
+        getAtomIfSupported(supportedAtoms, atomCount, "_NET_WM_WINDOW_TYPE");
     _glfw.x11.NET_WM_WINDOW_TYPE_NORMAL =
-        getSupportedAtom(supportedAtoms, atomCount, "_NET_WM_WINDOW_TYPE_NORMAL");
+        getAtomIfSupported(supportedAtoms, atomCount, "_NET_WM_WINDOW_TYPE_NORMAL");
     _glfw.x11.NET_WORKAREA =
-        getSupportedAtom(supportedAtoms, atomCount, "_NET_WORKAREA");
+        getAtomIfSupported(supportedAtoms, atomCount, "_NET_WORKAREA");
     _glfw.x11.NET_CURRENT_DESKTOP =
-        getSupportedAtom(supportedAtoms, atomCount, "_NET_CURRENT_DESKTOP");
+        getAtomIfSupported(supportedAtoms, atomCount, "_NET_CURRENT_DESKTOP");
     _glfw.x11.NET_ACTIVE_WINDOW =
-        getSupportedAtom(supportedAtoms, atomCount, "_NET_ACTIVE_WINDOW");
+        getAtomIfSupported(supportedAtoms, atomCount, "_NET_ACTIVE_WINDOW");
     _glfw.x11.NET_FRAME_EXTENTS =
-        getSupportedAtom(supportedAtoms, atomCount, "_NET_FRAME_EXTENTS");
+        getAtomIfSupported(supportedAtoms, atomCount, "_NET_FRAME_EXTENTS");
     _glfw.x11.NET_REQUEST_FRAME_EXTENTS =
-        getSupportedAtom(supportedAtoms, atomCount, "_NET_REQUEST_FRAME_EXTENTS");
+        getAtomIfSupported(supportedAtoms, atomCount, "_NET_REQUEST_FRAME_EXTENTS");
 
     XFree(supportedAtoms);
 }
@@ -506,6 +507,7 @@ static int errorHandler(Display *display, XErrorEvent* event)
 {
     if (_glfw.x11.display != display)
         return 0;
+
     _glfw.x11.errorCode = event->error_code;
     return 0;
 }

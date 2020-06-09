@@ -569,6 +569,33 @@
  *  @analysis Application programmer error.  Fix the offending call.
  */
 #define GLFW_NO_WINDOW_CONTEXT      0x0001000A
+/*! @brief The reuqested feature is not provided by the platform.
+ *
+ *  The requested feature is not provided by the platform, so GLFW is unable to
+ *  implement it.  The documentation for each function notes if it could emit
+ *  this error.
+ *
+ *  @analysis Platform or platform version limitation.  The error can be ignored
+ *  unless the feature is critical to the application.
+ *
+ *  @par
+ *  A function call that emits this error has no effect other than the error and
+ *  updating any existing out parameters.
+ */
+#define GLFW_FEATURE_UNAVAILABLE    0x0001000C
+/*! @brief The requested feature is not implemented for the platform.
+ *
+ *  The requested feature has not yet been implemented in GLFW for this platform.
+ *
+ *  @analysis An incomplete implementation of GLFW for this platform, hopefully
+ *  fixed in a future release.  The error can be ignored unless the feature is
+ *  critical to the application.
+ *
+ *  @par
+ *  A function call that emits this error has no effect other than the error and
+ *  updating any existing out parameters.
+ */
+#define GLFW_FEATURE_UNIMPLEMENTED  0x0001000D
 /*! @} */
 
 /*! @addtogroup window
@@ -839,6 +866,7 @@
 #define GLFW_STICKY_KEYS            0x00033002
 #define GLFW_STICKY_MOUSE_BUTTONS   0x00033003
 #define GLFW_LOCK_KEY_MODS          0x00033004
+#define GLFW_RAW_MOUSE_MOTION       0x00033005
 
 #define GLFW_CURSOR_NORMAL          0x00034001
 #define GLFW_CURSOR_HIDDEN          0x00034002
@@ -1081,6 +1109,22 @@ typedef void (* GLFWwindowsizefun)(GLFWwindow*,int,int);
  *  @ingroup window
  */
 typedef void (* GLFWwindowclosefun)(GLFWwindow*);
+
+/*! @brief The function pointer type for application close callbacks.
+ *
+ *  This is the function pointer type for application close callbacks.  A application
+ *  close callback function has the following signature:
+ *  @code
+ *  void function_name(int flags)
+ *  @endcode
+ *
+ *  @param[in] flags 0 for a user requested application quit, 1 if a fatal error occurred and application should quit ASAP
+ *
+ *  @sa @ref glfwSetApplicationCloseCallback
+ *
+ *  @ingroup window
+ */
+typedef void (* GLFWapplicationclosefun)(int);
 
 /*! @brief The function pointer type for window content refresh callbacks.
  *
@@ -1858,6 +1902,10 @@ typedef GLFWwindowclosefun (*glfwSetWindowCloseCallback_func)(GLFWwindow*, GLFWw
 GFW_EXTERN glfwSetWindowCloseCallback_func glfwSetWindowCloseCallback_impl;
 #define glfwSetWindowCloseCallback glfwSetWindowCloseCallback_impl
 
+typedef GLFWapplicationclosefun (*glfwSetApplicationCloseCallback_func)(GLFWapplicationclosefun);
+GFW_EXTERN glfwSetApplicationCloseCallback_func glfwSetApplicationCloseCallback_impl;
+#define glfwSetApplicationCloseCallback glfwSetApplicationCloseCallback_impl
+
 typedef GLFWwindowrefreshfun (*glfwSetWindowRefreshCallback_func)(GLFWwindow*, GLFWwindowrefreshfun);
 GFW_EXTERN glfwSetWindowRefreshCallback_func glfwSetWindowRefreshCallback_impl;
 #define glfwSetWindowRefreshCallback glfwSetWindowRefreshCallback_impl
@@ -1897,6 +1945,10 @@ GFW_EXTERN glfwGetInputMode_func glfwGetInputMode_impl;
 typedef void (*glfwSetInputMode_func)(GLFWwindow*, int, int);
 GFW_EXTERN glfwSetInputMode_func glfwSetInputMode_impl;
 #define glfwSetInputMode glfwSetInputMode_impl
+
+typedef int (*glfwRawMouseMotionSupported_func)(void);
+GFW_EXTERN glfwRawMouseMotionSupported_func glfwRawMouseMotionSupported_impl;
+#define glfwRawMouseMotionSupported glfwRawMouseMotionSupported_impl
 
 typedef const char* (*glfwGetKeyName_func)(int, int);
 GFW_EXTERN glfwGetKeyName_func glfwGetKeyName_impl;

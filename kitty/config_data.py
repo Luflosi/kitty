@@ -18,7 +18,7 @@ from .conf.utils import (
 )
 from .constants import FloatEdges, config_dir, is_macos
 from .fast_data_types import CURSOR_BEAM, CURSOR_BLOCK, CURSOR_UNDERLINE
-from .layout import all_layouts
+from .layout.interface import all_layouts
 from .rgb import Color, color_as_int, color_as_sharp, color_from_int
 from .utils import log_error
 
@@ -304,6 +304,9 @@ or by defining shortcuts for it in kitty.conf, for example::
     map alt+2 disable_ligatures_in all never
     map alt+3 disable_ligatures_in tab cursor
 
+Note that this refers to programming ligatures, typically implemented using the
+:code:`calt` OpenType feature. For disabling general ligatures, use the
+:opt:`font_features` setting.
 '''))
 
 o('font_features', 'none', long_text=_('''
@@ -445,7 +448,8 @@ Program with which to view scrollback in a new window. The scrollback buffer is
 passed as STDIN to this program. If you change it, make sure the program you
 use can handle ANSI escape sequences for colors and text formatting.
 INPUT_LINE_NUMBER in the command line above will be replaced by an integer
-representing which line should be at the top of the screen.'''))
+representing which line should be at the top of the screen. Similarly CURSOR_LINE and CURSOR_COLUMN
+will be replaced by the current cursor position.'''))
 
 o('scrollback_pager_history_size', 0, option_type=scrollback_pager_history_size, long_text=_('''
 Separate scrollback history size, used only for browsing the scrollback buffer (in MB).
@@ -778,6 +782,12 @@ this option can be used to keep the margins as small as possible when resizing t
 Note that this does not currently work on Wayland.
 '''))
 
+o('confirm_os_window_close', 0, option_type=positive_int, long_text=_('''
+Ask for confirmation when closing an OS window that has at least this
+number of kitty windows in it. A value of zero disables confirmation.
+This confirmation also applies to requests to quit the entire application (all
+OS windows, via the quite action).
+'''))
 # }}}
 
 g('tabbar')   # {{{
@@ -1374,8 +1384,7 @@ if is_macos:
 k('close_tab', 'kitty_mod+q', 'close_tab', _('Close tab'))
 if is_macos:
     k('close_tab', 'cmd+w', 'close_tab', _('Close tab'), add_to_docs=False)
-    #  Not yet implemented
-    #  k('close_os_window', 'shift+cmd+w', 'close_os_window', _('Close os window'), add_to_docs=False)
+    k('close_os_window', 'shift+cmd+w', 'close_os_window', _('Close OS window'), add_to_docs=False)
 k('move_tab_forward', 'kitty_mod+.', 'move_tab_forward', _('Move tab forward'))
 k('move_tab_backward', 'kitty_mod+,', 'move_tab_backward', _('Move tab backward'))
 k('set_tab_title', 'kitty_mod+alt+t', 'set_tab_title', _('Set tab title'))

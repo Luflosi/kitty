@@ -424,11 +424,7 @@ display_reconfigured(CGDirectDisplayID display UNUSED, CGDisplayChangeSummaryFla
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender
 {
     (void)sender;
-    _GLFWwindow* window;
-
-    for (window = _glfw.windowListHead;  window;  window = window->next)
-        _glfwInputWindowCloseRequest(window);
-
+    if (_glfw.callbacks.application_close) _glfw.callbacks.application_close(0);
     return NSTerminateCancel;
 }
 

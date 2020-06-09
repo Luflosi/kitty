@@ -46,6 +46,7 @@ version = tuple(
 )
 _plat = sys.platform.lower()
 is_macos = 'darwin' in _plat
+is_openbsd = 'openbsd' in _plat
 Env = glfw.Env
 env = Env()
 PKGCONFIG = os.environ.get('PKGCONFIG_EXE', 'pkg-config')
@@ -63,6 +64,9 @@ class Options(argparse.Namespace):
     libdir_name: str = 'lib'
     extra_logging: List[str] = []
     update_check_interval: float = 24
+    egl_library: Optional[str] = None
+    startup_notification_library: Optional[str] = None
+    canberra_library: Optional[str] = None
 
 
 class CompileKey(NamedTuple):
@@ -231,6 +235,9 @@ def init_env(
     sanitize: bool = False,
     native_optimizations: bool = True,
     profile: bool = False,
+    egl_library: Optional[str] = None,
+    startup_notification_library: Optional[str] = None,
+    canberra_library: Optional[str] = None,
     extra_logging: Iterable[str] = ()
 ) -> Env:
     native_optimizations = native_optimizations and not sanitize and not debug
@@ -289,7 +296,26 @@ def init_env(
         cppflags.append('-DWITH_PROFILER')
         cflags.append('-g3')
         ldflags.append('-lprofiler')
-    return Env(cc, cppflags, cflags, ldflags, ccver=ccver)
+
+    library_paths = {}
+
+    if egl_library is not None:
+        assert('"' not in egl_library)
+        library_paths['glfw/egl_context.c'] = ['_GLFW_EGL_LIBRARY="' + egl_library + '"']
+
+    desktop_libs = []
+    if startup_notification_library is not None:
+        assert('"' not in startup_notification_library)
+        desktop_libs = ['_KITTY_STARTUP_NOTIFICATION_LIBRARY="' + startup_notification_library + '"']
+
+    if canberra_library is not None:
+        assert('"' not in canberra_library)
+        desktop_libs += ['_KITTY_CANBERRA_LIBRARY="' + canberra_library + '"']
+
+    if desktop_libs != []:
+        library_paths['kitty/desktop.c'] = desktop_libs
+
+    return Env(cc, cppflags, cflags, ldflags, library_paths, ccver=ccver)
 
 
 def kitty_env() -> Env:
@@ -316,7 +342,7 @@ def kitty_env() -> Env:
     ans.ldpaths += pylib + font_libs + gl_libs + libpng
     if is_macos:
         ans.ldpaths.extend('-framework Cocoa'.split())
-    else:
+    elif not is_openbsd:
         ans.ldpaths += ['-lrt']
         if '-ldl' not in ans.ldpaths:
             ans.ldpaths.append('-ldl')
@@ -346,7 +372,7 @@ def run_tool(cmd: Union[str, List[str]], desc: Optional[str] = None) -> None:
         raise SystemExit(ret)
 
 
-def get_vcs_rev_defines(env: Env) -> List[str]:
+def get_vcs_rev_defines(env: Env, src: str) -> List[str]:
     ans = []
     if os.path.exists('.git'):
         try:
@@ -368,7 +394,16 @@ def get_vcs_rev_defines(env: Env) -> List[str]:
     return ans
 
 
-SPECIAL_SOURCES: Dict[str, Tuple[str, Union[List[str], Callable[[Env], Union[List[str], Iterator[str]]]]]] = {
+def get_library_defines(env: Env, src: str) -> Optional[List[str]]:
+    try:
+        return env.library_paths[src]
+    except KeyError:
+        return None
+
+
+SPECIAL_SOURCES: Dict[str, Tuple[str, Union[List[str], Callable[[Env, str], Union[Optional[List[str]], Iterator[str]]]]]] = {
+    'glfw/egl_context.c': ('glfw/egl_context.c', get_library_defines),
+    'kitty/desktop.c': ('kitty/desktop.c', get_library_defines),
     'kitty/parser_dump.c': ('kitty/parser.c', ['DUMP_COMMANDS']),
     'kitty/data-types.c': ('kitty/data-types.c', get_vcs_rev_defines),
 }
@@ -556,11 +591,9 @@ def compile_c_extension(
         is_special = src in SPECIAL_SOURCES
         if is_special:
             src, defines_ = SPECIAL_SOURCES[src]
-            if callable(defines_):
-                defines = defines_(kenv)
+            defines = defines_(kenv, src) if callable(defines_) else defines_
+            if defines is not None:
                 cppflags.extend(map(define, defines))
-            else:
-                cppflags.extend(map(define, defines_))
 
         cmd = [kenv.cc, '-MMD'] + cppflags + kenv.cflags
         cmd += ['-c', src] + ['-o', dest]
@@ -665,7 +698,11 @@ def compile_kittens(compilation_database: CompilationDatabase) -> None:
 
 def build(args: Options, native_optimizations: bool = True) -> None:
     global env
-    env = init_env(args.debug, args.sanitize, native_optimizations, args.profile, args.extra_logging)
+    env = init_env(
+        args.debug, args.sanitize, native_optimizations, args.profile,
+        args.egl_library, args.startup_notification_library, args.canberra_library,
+        args.extra_logging
+    )
     sources, headers = find_c_files()
     compile_c_extension(
         kitty_env(), 'kitty/fast_data_types', args.compilation_database, sources, headers
@@ -700,7 +737,7 @@ def build_launcher(args: Options, launcher_dir: str = '.', bundle_type: str = 's
     elif bundle_type == 'source':
         cppflags.append('-DFROM_SOURCE')
     if bundle_type.startswith('macos-'):
-        klp = '../Frameworks/kitty'
+        klp = '../Resources/kitty'
     elif bundle_type.startswith('linux-'):
         klp = '../{}/kitty'.format(args.libdir_name.strip('/'))
     elif bundle_type == 'source':
@@ -908,9 +945,9 @@ def create_macos_bundle_gunk(dest: str) -> None:
     os.rename(ddir / 'share', ddir / 'Contents/Resources')
     os.rename(ddir / 'bin', ddir / 'Contents/MacOS')
     os.rename(ddir / 'lib', ddir / 'Contents/Frameworks')
-    os.symlink('kitty', ddir / 'Contents/MacOS/kitty-deref-symlink')
+    os.rename(ddir / 'Contents/Frameworks/kitty', ddir / 'Contents/Resources/kitty')
     launcher = ddir / 'Contents/MacOS/kitty'
-    in_src_launcher = ddir / 'Contents/Frameworks/kitty/kitty/launcher/kitty'
+    in_src_launcher = ddir / 'Contents/Resources/kitty/kitty/launcher/kitty'
     if os.path.exists(in_src_launcher):
         os.remove(in_src_launcher)
     os.makedirs(os.path.dirname(in_src_launcher), exist_ok=True)
@@ -1068,6 +1105,27 @@ def option_parser() -> argparse.ArgumentParser:  # {{{
         default=Options.update_check_interval,
         help='When building a package, the default value for the update_check_interval setting will'
         ' be set to this number. Use zero to disable update checking.'
+    )
+    p.add_argument(
+        '--egl-library',
+        type=str,
+        default=Options.egl_library,
+        help='The filename argument passed to dlopen for libEGL.'
+        ' This can be used to change the name of the loaded library or specify an absolute path.'
+    )
+    p.add_argument(
+        '--startup-notification-library',
+        type=str,
+        default=Options.startup_notification_library,
+        help='The filename argument passed to dlopen for libstartup-notification-1.'
+        ' This can be used to change the name of the loaded library or specify an absolute path.'
+    )
+    p.add_argument(
+        '--canberra-library',
+        type=str,
+        default=Options.canberra_library,
+        help='The filename argument passed to dlopen for libcanberra.'
+        ' This can be used to change the name of the loaded library or specify an absolute path.'
     )
     return p
 # }}}

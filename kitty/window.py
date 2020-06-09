@@ -224,13 +224,11 @@ class Window:
         self.pty_resized_once = False
         self.needs_attention = False
         self.override_title = override_title
-        self.overlay_window_id: Optional[int] = None
-        self.overlay_for: Optional[int] = None
         self.default_title = os.path.basename(child.argv[0] or appname)
         self.child_title = self.default_title
         self.title_stack: Deque[str] = deque(maxlen=10)
         self.allow_remote_control = child.allow_remote_control
-        self.id = add_window(tab.os_window_id, tab.id, self.title)
+        self.id: int = add_window(tab.os_window_id, tab.id, self.title)
         self.margin = EdgeWidths()
         self.padding = EdgeWidths()
         if not self.id:
@@ -240,12 +238,12 @@ class Window:
         self.tabref: Callable[[], Optional[TabType]] = weakref.ref(tab)
         self.clipboard_control_buffers = {'p': '', 'c': ''}
         self.destroyed = False
-        self.geometry = WindowGeometry(0, 0, 0, 0, 0, 0)
+        self.geometry: WindowGeometry = WindowGeometry(0, 0, 0, 0, 0, 0)
         self.needs_layout = True
-        self.is_visible_in_layout = True
+        self.is_visible_in_layout: bool = True
         self.child, self.opts = child, opts
         cell_width, cell_height = cell_size_for_window(self.os_window_id)
-        self.screen = Screen(self, 24, 80, opts.scrollback_lines, cell_width, cell_height, self.id)
+        self.screen: Screen = Screen(self, 24, 80, opts.scrollback_lines, cell_width, cell_height, self.id)
         if copy_colors_from is not None:
             self.screen.copy_colors_from(copy_colors_from.screen)
         else:
@@ -297,8 +295,8 @@ class Window:
         return self.override_title or self.child_title
 
     def __repr__(self) -> str:
-        return 'Window(title={}, id={}, overlay_for={}, overlay_window_id={})'.format(
-                self.title, self.id, self.overlay_for, self.overlay_window_id)
+        return 'Window(title={}, id={})'.format(
+                self.title, self.id)
 
     def as_dict(self, is_focused: bool = False) -> WindowDict:
         return dict(
@@ -321,8 +319,6 @@ class Window:
             'default_title': self.default_title,
             'title_stack': list(self.title_stack),
             'allow_remote_control': self.allow_remote_control,
-            'overlay_window_id': self.overlay_window_id,
-            'overlay_for': self.overlay_for,
             'cwd': self.child.current_cwd or self.child.cwd,
             'env': self.child.environ,
             'cmdline': self.child.cmdline,
@@ -362,11 +358,11 @@ class Window:
             return False
         return False
 
-    def set_visible_in_layout(self, window_idx: int, val: bool) -> None:
+    def set_visible_in_layout(self, val: bool) -> None:
         val = bool(val)
         if val is not self.is_visible_in_layout:
             self.is_visible_in_layout = val
-            update_window_visibility(self.os_window_id, self.tab_id, self.id, window_idx, val)
+            update_window_visibility(self.os_window_id, self.tab_id, self.id, val)
             if val:
                 self.refresh()
 
@@ -379,7 +375,7 @@ class Window:
         self.screen_geometry = sg = calculate_gl_geometry(window_geometry, vw, vh, cw, ch)
         return sg
 
-    def set_geometry(self, window_idx: int, new_geometry: WindowGeometry) -> None:
+    def set_geometry(self, new_geometry: WindowGeometry) -> None:
         if self.destroyed:
             return
         if self.needs_layout or new_geometry.xnum != self.screen.columns or new_geometry.ynum != self.screen.lines:
@@ -398,7 +394,7 @@ class Window:
         else:
             sg = self.update_position(new_geometry)
         self.geometry = g = new_geometry
-        set_window_render_data(self.os_window_id, self.tab_id, self.id, window_idx, sg.xstart, sg.ystart, sg.dx, sg.dy, self.screen, *g[:4])
+        set_window_render_data(self.os_window_id, self.tab_id, self.id, sg.xstart, sg.ystart, sg.dx, sg.dy, self.screen, *g[:4])
         self.update_effective_padding()
 
     def contains(self, x: int, y: int) -> bool:
@@ -440,6 +436,8 @@ class Window:
         get_boss().child_monitor.set_iutf8_winid(self.id, on)
 
     def focus_changed(self, focused: bool) -> None:
+        if self.destroyed:
+            return
         if focused:
             self.needs_attention = False
             if self.screen.focus_tracking_enabled:
@@ -626,7 +624,7 @@ class Window:
         lines = self.screen.text_for_selection()
         if self.opts.strip_trailing_spaces == 'always' or (
                 self.opts.strip_trailing_spaces == 'smart' and not self.screen.is_rectangle_select()):
-            return ''.join((l.rstrip() or '\n') for l in lines)
+            return ''.join((ln.rstrip() or '\n') for ln in lines)
         return ''.join(lines)
 
     def call_watchers(self, which: Iterable[Watcher], data: Dict[str, Any]) -> None:
@@ -700,7 +698,14 @@ class Window:
     def show_scrollback(self) -> None:
         text = self.as_text(as_ansi=True, add_history=True, add_wrap_markers=True)
         data = self.pipe_data(text, has_wrap_markers=True)
-        cmd = [x.replace('INPUT_LINE_NUMBER', str(data['input_line_number'])) for x in self.opts.scrollback_pager]
+
+        def prepare_arg(x: str) -> str:
+            x = x.replace('INPUT_LINE_NUMBER', str(data['input_line_number']))
+            x = x.replace('CURSOR_LINE', str(data['cursor_y']))
+            x = x.replace('CURSOR_COLUMN', str(data['cursor_x']))
+            return x
+
+        cmd = list(map(prepare_arg, self.opts.scrollback_pager))
         if not os.path.isabs(cmd[0]):
             import shutil
             exe = shutil.which(cmd[0])

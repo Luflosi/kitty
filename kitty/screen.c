@@ -28,6 +28,8 @@
 static const ScreenModes empty_modes = {0, .mDECAWM=true, .mDECTCEM=true, .mDECARM=true};
 static Selection EMPTY_SELECTION = {{0}};
 
+#define CSI_REP_MAX_REPETITIONS 65535u
+
 // Constructor/destructor {{{
 
 static inline void
@@ -1252,6 +1254,27 @@ screen_insert_characters(Screen *self, unsigned int count) {
 }
 
 void
+screen_repeat_character(Screen *self, unsigned int count) {
+    unsigned int top = self->margin_top, bottom = self->margin_bottom;
+    unsigned int x = self->cursor->x;
+    if (count == 0) count = 1;
+    if (x > self->columns) return;
+    if (x > 0) {
+        linebuf_init_line(self->linebuf, self->cursor->y);
+    } else {
+        if (self->cursor->y > 0) {
+            linebuf_init_line(self->linebuf, self->cursor->y - 1);
+            x = self->columns;
+        } else return;
+    }
+    char_type ch = line_get_char(self->linebuf->line, x-1);
+    if (top <= self->cursor->y && self->cursor->y <= bottom && !is_ignored_char(ch)) {
+        unsigned int num = MIN(count, CSI_REP_MAX_REPETITIONS);
+        while (num-- > 0) screen_draw(self, ch);
+    }
+}
+
+void
 screen_delete_characters(Screen *self, unsigned int count) {
     // Delete characters, later characters are moved left
     unsigned int top = self->margin_top, bottom = self->margin_bottom;
@@ -1406,6 +1429,16 @@ report_mode_status(Screen *self, unsigned int which, bool private) {
         KNOWN_MODE(EXTENDED_KEYBOARD);
         KNOWN_MODE(FOCUS_TRACKING);
 #undef KNOWN_MODE
+        case ALTERNATE_SCREEN:
+            ans = self->linebuf == self->alt_linebuf ? 1 : 2; break;
+        case MOUSE_BUTTON_TRACKING:
+            ans = self->modes.mouse_tracking_mode == BUTTON_MODE ? 1 : 2; break;
+        case MOUSE_MOTION_TRACKING:
+            ans = self->modes.mouse_tracking_mode == MOTION_MODE ? 1 : 2; break;
+        case MOUSE_MOVE_TRACKING:
+            ans = self->modes.mouse_tracking_mode == ANY_MODE ? 1 : 2; break;
+        case MOUSE_SGR_MODE:
+            ans = self->modes.mouse_tracking_protocol == SGR_PROTOCOL ? 1 : 2; break;
     }
     int sz = snprintf(buf, sizeof(buf) - 1, "%s%u;%u$y", (private ? "?" : ""), which, ans);
     if (sz > 0) write_escape_code_to_child(self, CSI, buf);
@@ -2171,6 +2204,15 @@ is_opt_word_char(char_type ch) {
     return false;
 }
 
+static bool
+is_char_ok_for_word_extension(Line* line, index_type x) {
+    char_type ch = line->cpu_cells[x].ch;
+    if (is_word_char(ch) || is_opt_word_char(ch)) return true;
+    // pass : from :// so that common URLs are matched
+    if (ch == ':' && x + 2 < line->xnum && line->cpu_cells[x+1].ch == '/' && line->cpu_cells[x+2].ch == '/') return true;
+    return false;
+}
+
 bool
 screen_selection_range_for_word(Screen *self, const index_type x, const index_type y, index_type *y1, index_type *y2, index_type *s, index_type *e, bool initial_selection) {
     if (y >= self->lines || x >= self->columns) return false;
@@ -2178,7 +2220,7 @@ screen_selection_range_for_word(Screen *self, const index_type x, const index_ty
     Line *line = visual_line_(self, y);
     *y1 = y;
     *y2 = y;
-#define is_ok(x) (is_word_char((line->cpu_cells[x].ch)) || is_opt_word_char(line->cpu_cells[x].ch))
+#define is_ok(x) is_char_ok_for_word_extension(line, x)
     if (!is_ok(x)) {
         if (initial_selection) return false;
         *s = x; *e = x;

@@ -346,7 +346,10 @@ parse_input(ChildMonitor *self) {
     }
 
     if (UNLIKELY(kill_signal_received)) {
-        global_state.terminate = true;
+        global_state.quit_request = IMPERATIVE_CLOSE_REQUESTED;
+        global_state.has_pending_closes = true;
+        request_tick_callback();
+        kill_signal_received = false;
     } else {
         count = self->count;
         for (size_t i = 0; i < count; i++) {
@@ -461,10 +464,10 @@ set_iutf8(int UNUSED fd, bool UNUSED on) {
 
 static PyObject*
 pyset_iutf8(ChildMonitor *self, PyObject *args) {
-    unsigned long window_id;
+    id_type window_id;
     int on;
     PyObject *found = Py_False;
-    if (!PyArg_ParseTuple(args, "kp", &window_id, &on)) return NULL;
+    if (!PyArg_ParseTuple(args, "Kp", &window_id, &on)) return NULL;
     children_mutex(lock);
     for (size_t i = 0; i < self->count; i++) {
         if (children[i].id == window_id) {
@@ -629,7 +632,13 @@ draw_resizing_text(OSWindow *w) {
 static inline bool
 no_render_frame_received_recently(OSWindow *w, monotonic_t now, monotonic_t max_wait) {
     bool ans = now - w->last_render_frame_received_at > max_wait;
-    if (ans && global_state.debug_rendering) log_error("No render frame received in %.2f seconds, re-requesting at: %f", monotonic_t_to_s_double(max_wait), monotonic_t_to_s_double(now));
+    if (ans && global_state.debug_rendering) {
+        if (global_state.is_wayland) {
+            log_error("No render frame received in %.2f seconds", monotonic_t_to_s_double(max_wait));
+        } else  {
+            log_error("No render frame received in %.2f seconds, re-requesting at: %f", monotonic_t_to_s_double(max_wait), monotonic_t_to_s_double(now));
+        }
+    }
     return ans;
 }
 
@@ -844,11 +853,6 @@ process_pending_resizes(monotonic_t now) {
 }
 
 static inline void
-close_all_windows(void) {
-    for (size_t w = 0; w < global_state.num_os_windows; w++) mark_os_window_for_close(&global_state.os_windows[w], IMPERATIVE_CLOSE_REQUESTED);
-}
-
-static inline void
 close_os_window(ChildMonitor *self, OSWindow *os_window) {
     destroy_os_window(os_window);
     call_boss(on_os_window_closed, "Kii", os_window->id, os_window->window_width, os_window->window_height);
@@ -861,6 +865,12 @@ close_os_window(ChildMonitor *self, OSWindow *os_window) {
 
 static inline bool
 process_pending_closes(ChildMonitor *self) {
+    if (global_state.quit_request == CONFIRMABLE_CLOSE_REQUESTED) {
+        call_boss(quit, "");
+    }
+    if (global_state.quit_request == IMPERATIVE_CLOSE_REQUESTED) {
+        for (size_t w = 0; w < global_state.num_os_windows; w++) global_state.os_windows[w].close_request = IMPERATIVE_CLOSE_REQUESTED;
+    }
     bool has_open_windows = false;
     for (size_t w = global_state.num_os_windows; w > 0; w--) {
         OSWindow *os_window = global_state.os_windows + w - 1;
@@ -869,11 +879,14 @@ process_pending_closes(ChildMonitor *self) {
                 has_open_windows = true;
                 break;
             case CONFIRMABLE_CLOSE_REQUESTED:
-                os_window->close_request = NO_CLOSE_REQUESTED;
+                os_window->close_request = CLOSE_BEING_CONFIRMED;
                 call_boss(confirm_os_window_close, "K", os_window->id);
                 if (os_window->close_request == IMPERATIVE_CLOSE_REQUESTED) {
                     close_os_window(self, os_window);
                 } else has_open_windows = true;
+                break;
+            case CLOSE_BEING_CONFIRMED:
+                has_open_windows = true;
                 break;
             case IMPERATIVE_CLOSE_REQUESTED:
                 close_os_window(self, os_window);
@@ -883,10 +896,10 @@ process_pending_closes(ChildMonitor *self) {
     global_state.has_pending_closes = false;
 #ifdef __APPLE__
     if (!OPT(macos_quit_when_last_window_closed)) {
-        if (!has_open_windows && !application_quit_requested()) has_open_windows = true;
+        if (!has_open_windows && global_state.quit_request != IMPERATIVE_CLOSE_REQUESTED) has_open_windows = true;
     }
 #endif
-    return has_open_windows;
+    return !has_open_windows;
 }
 
 #ifdef __APPLE__
@@ -948,23 +961,16 @@ process_global_state(void *data) {
             cocoa_pending_actions = 0;
         }
 #endif
-    if (global_state.terminate) {
-        global_state.terminate = false;
-        close_all_windows();
-#ifdef __APPLE__
-        request_application_quit();
-#endif
-    }
     report_reaped_pids();
-    bool has_open_windows = true;
-    if (global_state.has_pending_closes) has_open_windows = process_pending_closes(self);
-    if (has_open_windows) {
+    bool should_quit = false;
+    if (global_state.has_pending_closes) should_quit = process_pending_closes(self);
+    if (should_quit) {
+        stop_main_loop();
+    } else {
         if (maximum_wait >= 0) {
             if (maximum_wait == 0) request_tick_callback();
             else state_check_timer_enabled = true;
         }
-    } else {
-        stop_main_loop();
     }
     update_main_loop_timer(state_check_timer, MAX(0, maximum_wait), state_check_timer_enabled);
 }
@@ -1576,6 +1582,7 @@ static PyMethodDef methods[] = {
     METHOD(main_loop, METH_NOARGS)
     METHOD(mark_for_close, METH_VARARGS)
     METHOD(resize_pty, METH_VARARGS)
+    {"set_iutf8_winid", (PyCFunction)pyset_iutf8, METH_VARARGS, ""},
     {NULL}  /* Sentinel */
 };
 
@@ -1617,7 +1624,6 @@ static PyMethodDef module_methods[] = {
     {"add_timer", (PyCFunction)add_python_timer, METH_VARARGS, ""},
     {"remove_timer", (PyCFunction)remove_python_timer, METH_VARARGS, ""},
     METHODB(monitor_pid, METH_VARARGS),
-    {"set_iutf8_winid", (PyCFunction)pyset_iutf8, METH_VARARGS, ""},
     METHODB(cocoa_set_menubar_title, METH_VARARGS),
     {NULL}  /* Sentinel */
 };

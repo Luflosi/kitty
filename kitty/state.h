@@ -139,7 +139,7 @@ typedef struct {
 } OSWindowGeometry;
 
 enum RENDER_STATE { RENDER_FRAME_NOT_REQUESTED, RENDER_FRAME_REQUESTED, RENDER_FRAME_READY };
-typedef enum { NO_CLOSE_REQUESTED, CONFIRMABLE_CLOSE_REQUESTED, IMPERATIVE_CLOSE_REQUESTED } CloseRequest;
+typedef enum { NO_CLOSE_REQUESTED, CONFIRMABLE_CLOSE_REQUESTED, CLOSE_BEING_CONFIRMED, IMPERATIVE_CLOSE_REQUESTED } CloseRequest;
 
 typedef struct {
     monotonic_t last_resize_event_at;
@@ -167,7 +167,7 @@ typedef struct {
     monotonic_t cursor_blink_zero_time, last_mouse_activity_at;
     double mouse_x, mouse_y;
     double logical_dpi_x, logical_dpi_y, font_sz_in_pts;
-    bool mouse_button_pressed[20];
+    bool mouse_button_pressed[32];
     PyObject *window_title;
     bool is_key_pressed[MAX_KEY_COUNT];
     bool viewport_size_dirty, viewport_updated_at_least_once;
@@ -197,7 +197,6 @@ typedef struct {
     OSWindow *os_windows;
     size_t num_os_windows, capacity;
     OSWindow *callback_os_window;
-    bool terminate;
     bool is_wayland;
     bool has_render_frames;
     bool debug_rendering, debug_font_fallback;
@@ -207,6 +206,7 @@ typedef struct {
     double font_sz_in_pts;
     struct { double x, y; } default_dpi;
     id_type active_drag_in_window;
+    CloseRequest quit_request;
 } GlobalState;
 
 extern GlobalState global_state;
@@ -265,8 +265,6 @@ typedef enum {
     PASTE = 32,
 } CocoaPendingAction;
 void set_cocoa_pending_action(CocoaPendingAction action, const char*);
-bool application_quit_requested(void);
-void request_application_quit(void);
 #endif
 void request_frame_render(OSWindow *w);
 void request_tick_callback(void);
@@ -280,3 +278,4 @@ void stop_main_loop(void);
 void os_window_update_size_increments(OSWindow *window);
 void set_os_window_title_from_window(Window *w, OSWindow *os_window);
 void update_os_window_title(OSWindow *os_window);
+void fake_scroll(Window *w, int amount, bool upwards);
