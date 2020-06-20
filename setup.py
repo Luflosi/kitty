@@ -860,7 +860,10 @@ def macos_info_plist() -> bytes:
     if hasattr(fast_data_types, 'KITTY_VCS_VERSION'):
         VERSION = fast_data_types.KITTY_VCS_VERSION
     pl = dict(
+        # see https://github.com/kovidgoyal/kitty/issues/1233
         CFBundleDevelopmentRegion='English',
+        CFBundleAllowMixedLocalizations=True,
+
         CFBundleDisplayName=appname,
         CFBundleName=appname,
         CFBundleIdentifier='net.kovidgoyal.' + appname,

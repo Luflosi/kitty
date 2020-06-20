@@ -15,11 +15,17 @@ images and other types of documents directly in your terminal, even over SSH.
 `termpdf.py <https://github.com/dsanson/termpdf.py>`_
     a terminal PDF/DJVU/CBR viewer
 
+`mdcat <https://github.com/lunaryorn/mdcat>`_
+    Display markdown files nicely formatted with images in the terminal
+
 `ranger <https://github.com/ranger/ranger>`_
     a terminal file manager, with previews of file contents powered by kitty's graphics protocol.
 
 `nnn <https://github.com/jarun/nnn/>`_
     another terminal file manager, with previews of file contents powered by kitty's graphics protocol.
+
+`koneko <https://github.com/twenty5151/koneko>`_
+    browse images from the pixiv artist community directly in kitty
 
 
 System and data visualisation tools
@@ -27,6 +33,12 @@ System and data visualisation tools
 
 `neofetch <https://github.com/dylanaraps/neofetch>`_
     A command line system information tool that shows images using kitty's graphics protocol
+
+`matplotlib <https://github.com/jktr/matplotlib-backend-kitty>`_
+    show matplotlib plots directly in kitty
+
+`KittyTerminalImages.jl <https://github.com/simonschoelly/KittyTerminalImages.jl>`_
+    show images from Julia directly in kitty
 
 `gnuplot <http://www.gnuplot.info/>`_
     a graphing and data visualization tool that can be made to display its
@@ -64,6 +76,9 @@ such a split windows, previews, REPLs etc.
 
 `vim-kitty-navigator <https://github.com/knubie/vim-kitty-navigator>`_
     allows you to navigate seamlessly between vim and kitty splits using a consistent set of hotkeys.
+
+`vim-test <https://github.com/vim-test/vim-test>`_
+    allows easily running tests in a terminal window
 
 
 Scrollback manipulation
