@@ -12,6 +12,7 @@ from pygments.formatter import Formatter  # type: ignore
 from pygments.lexers import get_lexer_for_filename  # type: ignore
 from pygments.util import ClassNotFound  # type: ignore
 
+from kitty.multiprocessing import get_process_pool_executor
 from kitty.rgb import color_as_sgr, parse_sharp
 
 from .collect import Collection, Segment, data_for_path, lines_for_path
@@ -139,7 +140,7 @@ def highlight_for_diff(path: str, aliases: Dict[str, str]) -> DiffHighlight:
 def highlight_collection(collection: Collection, aliases: Optional[Dict[str, str]] = None) -> Union[str, Dict[str, DiffHighlight]]:
     jobs = {}
     ans: Dict[str, DiffHighlight] = {}
-    with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
+    with get_process_pool_executor(prefer_fork=True) as executor:
         for path, item_type, other_path in collection:
             if item_type != 'rename':
                 for p in (path, other_path):
