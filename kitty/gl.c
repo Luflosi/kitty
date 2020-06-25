@@ -54,7 +54,6 @@ gl_init() {
         if (!GLAD_GL_ARB_##name) { \
             fatal("The OpenGL driver on this system is missing the required extension: ARB_%s", #name); \
         }
-        ARB_TEST(texture_storage);
 #undef ARB_TEST
         glad_loaded = true;
         int gl_major = GLAD_VERSION_MAJOR(gl_version);
@@ -305,8 +304,7 @@ add_located_attribute_to_vao(ssize_t vao_idx, GLint aloc, GLint size, GLenum dat
             glVertexAttribPointer(aloc, size, data_type, GL_FALSE, stride, offset);
             break;
     }
-    if (divisor) {
-        glVertexAttribDivisor(aloc, divisor);
+    if (divisor > 1) {
     }
     unbind_buffer(buf);
 }

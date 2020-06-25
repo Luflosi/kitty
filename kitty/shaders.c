@@ -96,7 +96,8 @@ realloc_sprite_texture(FONTS_DATA_HANDLE fg) {
     znum = z + 1;
     SpriteMap *sprite_map = (SpriteMap*)fg->sprite_map;
     width = xnum * sprite_map->cell_width; height = ynum * sprite_map->cell_height;
-    glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, width, height, znum);
+    //glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, width, height, znum);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, width, height, znum, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
     if (sprite_map->texture_id) {
         // need to re-alloc
         src_ynum = MAX(1, sprite_map->last_ynum);
@@ -809,8 +810,9 @@ static PyMethodDef module_methods[] = {
 bool
 init_shaders(PyObject *module) {
 #define C(x) if (PyModule_AddIntConstant(module, #x, x) != 0) { PyErr_NoMemory(); return false; }
+#define C2(x) if (PyModule_AddStringConstant(module, #x, "x") != 0) { PyErr_NoMemory(); return false; }
     C(CELL_PROGRAM); C(CELL_BG_PROGRAM); C(CELL_SPECIAL_PROGRAM); C(CELL_FG_PROGRAM); C(BORDERS_PROGRAM); C(GRAPHICS_PROGRAM); C(GRAPHICS_PREMULT_PROGRAM); C(GRAPHICS_ALPHA_MASK_PROGRAM); C(BLIT_PROGRAM); C(BGIMAGE_PROGRAM); C(TINT_PROGRAM);
-    C(GLSL_VERSION);
+    C2(GLSL_VERSION);
     C(GL_VERSION);
     C(GL_VENDOR);
     C(GL_SHADING_LANGUAGE_VERSION);
@@ -838,6 +840,7 @@ init_shaders(PyObject *module) {
     C(GL_BLEND); C(GL_FLOAT); C(GL_UNSIGNED_INT); C(GL_ARRAY_BUFFER); C(GL_UNIFORM_BUFFER);
 
 #undef C
+#undef C2
     if (PyModule_AddFunctions(module, module_methods) != 0) return false;
     return true;
 }

@@ -1,5 +1,7 @@
 #version GLSL_VERSION
 
+precision mediump float;
+
 uniform sampler2D image;
 
 in vec2 texcoord;

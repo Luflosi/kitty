@@ -43,11 +43,11 @@ def expandvars(val: str, env: Dict[str, str] = {}) -> str:
 
 
 def load_shaders(name: str) -> Tuple[str, str]:
-    from .fast_data_types import GLSL_VERSION
+    GLSL_VERSION = '310 es'
     with open(os.path.join(BASE, '{}_vertex.glsl'.format(name))) as f:
-        vert = f.read().replace('GLSL_VERSION', str(GLSL_VERSION), 1)
+        vert = f.read().replace('GLSL_VERSION', GLSL_VERSION, 1)
     with open(os.path.join(BASE, '{}_fragment.glsl'.format(name))) as f:
-        frag = f.read().replace('GLSL_VERSION', str(GLSL_VERSION), 1)
+        frag = f.read().replace('GLSL_VERSION', GLSL_VERSION, 1)
     return vert, frag
 
 

@@ -1,6 +1,8 @@
 #version GLSL_VERSION
 #define ALPHA_TYPE
 
+precision mediump float;
+
 uniform sampler2D image;
 #ifdef ALPHA_MASK
 uniform uint fg;

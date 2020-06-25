@@ -10,6 +10,9 @@
 #define NEEDS_FOREGROUND
 #endif
 
+precision mediump float;
+precision lowp sampler2DArray;
+
 #ifdef NEEDS_BACKROUND
 in vec3 background;
 in float draw_bg;

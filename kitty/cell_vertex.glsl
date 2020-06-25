@@ -145,9 +145,11 @@ void main() {
     uint r = instance_id / xnum;
     uint c = instance_id - r * xnum;
 
+    float c_float = float(c);
     /* The position of this vertex, at a corner of the cell  */
-    float left = xstart + c * dx;
-    float top = ystart - r * dy;
+    float r_float = float(r);
+    float left = xstart + c_float * dx;
+    float top = ystart - r_float * dy;
     vec2 xpos = vec2(left, left + dx);
     vec2 ypos = vec2(top, top - dy);
     uvec2 pos = cell_pos_map[gl_VertexID];
@@ -166,7 +168,7 @@ void main() {
     float is_block_cursor = step(float(cursor_fg_sprite_idx), 0.5);
     float cell_has_block_cursor = cell_has_cursor * is_block_cursor;
     int mark = int(text_attrs >> MARK_SHIFT) & MARK_MASK;
-    uint has_mark = uint(step(1, float(mark)));
+    uint has_mark = uint(step(1.0, float(mark)));
     uint bg_as_uint = resolve_color(colors[bg_index], default_colors[bg_index]);
     bg_as_uint = has_mark * color_table[NUM_COLORS + mark] + (ONE - has_mark) * bg_as_uint;
     vec3 bg = color_to_vec(bg_as_uint);
@@ -208,14 +210,14 @@ void main() {
 
     // Background {{{
 #ifdef NEEDS_BACKROUND
-    float cell_has_non_default_bg = step(1, float(abs(bg_as_uint - default_colors[1])));
-    draw_bg = 1;
+    float cell_has_non_default_bg = step(1.0, float(abs(int(bg_as_uint) - int(default_colors[1]))));
+    draw_bg = 1.0;
 
 #if defined(BACKGROUND)
     background = bg;
     // draw_bg_bitfield has bit 0 set to draw default bg cells and bit 1 set to draw non-default bg cells
-    uint draw_bg_mask = uint(2 * cell_has_non_default_bg + (1 - cell_has_non_default_bg));
-    draw_bg = step(1, float(draw_bg_bitfield & draw_bg_mask));
+    uint draw_bg_mask = uint(2.0 * cell_has_non_default_bg + (1.0 - cell_has_non_default_bg));
+    draw_bg = step(1.0, float(draw_bg_bitfield & draw_bg_mask));
 #endif
 
 #ifdef TRANSPARENT

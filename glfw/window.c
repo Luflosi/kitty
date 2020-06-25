@@ -299,7 +299,7 @@ void glfwDefaultWindowHints(void)
 
     // The default is OpenGL with minimum version 1.0
     memset(&_glfw.hints.context, 0, sizeof(_glfw.hints.context));
-    _glfw.hints.context.client = GLFW_OPENGL_API;
+    _glfw.hints.context.client = GLFW_OPENGL_ES_API;
     _glfw.hints.context.source = GLFW_NATIVE_CONTEXT_API;
     _glfw.hints.context.major  = 1;
     _glfw.hints.context.minor  = 0;

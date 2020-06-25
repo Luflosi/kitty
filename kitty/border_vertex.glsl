@@ -1,4 +1,7 @@
 #version GLSL_VERSION
+
+precision mediump float;
+
 uniform uvec2 viewport;
 uniform vec3 default_bg;
 uniform vec3 active_border_color;

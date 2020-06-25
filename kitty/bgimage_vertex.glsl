@@ -8,6 +8,8 @@
 #define tex_right 1
 #define tex_bottom 1
 
+precision mediump float;
+
 uniform float tiled;
 uniform vec4 sizes;  // [ window_width, window_height, image_width, image_height ]
 
@@ -32,7 +34,7 @@ float scale_factor(float window, float image) {
 }
 
 float tiling_factor(int i) {
-    return tiled * scale_factor(sizes[i], sizes[i + 2]) + (1 - tiled);
+    return tiled * scale_factor(sizes[i], sizes[i + 2]) + (1.0 - tiled);
 }
 
 void main() {

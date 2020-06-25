@@ -1,5 +1,7 @@
 #version GLSL_VERSION
 
+precision mediump float;
+
 uniform sampler2D image;
 uniform float opacity;
 uniform float premult;
@@ -11,5 +13,5 @@ void main() {
     float alpha = color.a * opacity;
     vec4 premult_color = vec4(color.rgb * alpha, alpha);
     color = vec4(color.rgb, alpha);
-    color = premult * premult_color + (1 - premult) * color;
+    color = premult * premult_color + (1.0 - premult) * color;
 }
