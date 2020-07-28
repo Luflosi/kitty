@@ -783,10 +783,10 @@ Note that this does not currently work on Wayland.
 '''))
 
 o('confirm_os_window_close', 0, option_type=positive_int, long_text=_('''
-Ask for confirmation when closing an OS window that has at least this
+Ask for confirmation when closing an OS window or a tab that has at least this
 number of kitty windows in it. A value of zero disables confirmation.
 This confirmation also applies to requests to quit the entire application (all
-OS windows, via the quite action).
+OS windows, via the quit action).
 '''))
 # }}}
 
@@ -1402,6 +1402,7 @@ g('shortcuts.fonts')  # {{{
 k('increase_font_size', 'kitty_mod+equal', 'change_font_size all +2.0', _('Increase font size'))
 if is_macos:
     k('increase_font_size', 'cmd+plus', 'change_font_size all +2.0', _('Increase font size'), add_to_docs=False)
+    k('increase_font_size', 'cmd+shift+equal', 'change_font_size all +2.0', _('Increase font size'), add_to_docs=False)
 k('decrease_font_size', 'kitty_mod+minus', 'change_font_size all -2.0', _('Decrease font size'))
 if is_macos:
     k('decrease_font_size', 'cmd+minus', 'change_font_size all -2.0', _('Decrease font size'), add_to_docs=False)

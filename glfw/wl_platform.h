@@ -50,8 +50,6 @@ typedef VkBool32 (APIENTRY *PFN_vkGetPhysicalDeviceWaylandPresentationSupportKHR
 #endif
 #include "backend_utils.h"
 #include "xkb_glfw.h"
-#include "egl_context.h"
-#include "osmesa_context.h"
 #include "wl_cursors.h"
 
 #include "wayland-xdg-shell-client-protocol.h"
@@ -65,9 +63,6 @@ typedef VkBool32 (APIENTRY *PFN_vkGetPhysicalDeviceWaylandPresentationSupportKHR
 #define _glfw_dlopen(name) dlopen(name, RTLD_LAZY | RTLD_LOCAL)
 #define _glfw_dlclose(handle) dlclose(handle)
 #define _glfw_dlsym(handle, name) dlsym(handle, name)
-
-#define _GLFW_EGL_NATIVE_WINDOW         ((EGLNativeWindowType) window->wl.native)
-#define _GLFW_EGL_NATIVE_DISPLAY        ((EGLNativeDisplayType) _glfw.wl.display)
 
 #define _GLFW_PLATFORM_WINDOW_STATE         _GLFWwindowWayland  wl
 #define _GLFW_PLATFORM_LIBRARY_WINDOW_STATE _GLFWlibraryWayland wl
@@ -137,7 +132,6 @@ typedef struct _GLFWwindowWayland
 
     _GLFWcursor*                currentCursor;
     double                      cursorPosX, cursorPosY;
-    struct wl_cursor_theme*     cursorTheme;
 
     char*                       title;
     char                        appId[256];
@@ -267,8 +261,7 @@ typedef struct _GLFWlibraryWayland
     size_t dataOffersCounter;
     _GLFWWaylandDataOffer dataOffers[8];
     char* primarySelectionString;
-
-    _wlCursorThemeManager*      cursorThemeManager;
+    GLFWWLCursorThemes cursor_themes;
 } _GLFWlibraryWayland;
 
 // Wayland-specific per-monitor data
@@ -292,7 +285,7 @@ typedef struct _GLFWcursorWayland
     struct wl_buffer*           buffer;
     int                         width, height;
     int                         xhot, yhot;
-    int                         currentImage;
+    unsigned int                currentImage;
     /** The scale of the cursor, or 0 if the cursor should be loaded late, or -1 if the cursor variable itself is unused. */
     int                         scale;
     /** Cursor shape stored to allow late cursor loading in setCursorImage. */

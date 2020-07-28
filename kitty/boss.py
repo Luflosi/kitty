@@ -49,14 +49,15 @@ from .typing import PopenType, TypedDict
 from .utils import (
     func_name, get_editor, get_primary_selection, is_path_in_temp_dir,
     log_error, open_url, parse_address_spec, parse_uri_list,
-    remove_socket_file, safe_print, set_primary_selection, single_instance,
-    startup_notification_handler
+    platform_window_id, remove_socket_file, safe_print, set_primary_selection,
+    single_instance, startup_notification_handler
 )
 from .window import MatchPatternType, Window
 
 
 class OSWindowDict(TypedDict):
     id: int
+    platform_window_id: Optional[int]
     is_focused: bool
     tabs: List[TabDict]
 
@@ -198,7 +199,7 @@ class Boss:
     ) -> int:
         if os_window_id is None:
             opts_for_size = opts_for_size or getattr(startup_session, 'os_window_size', None) or self.opts
-            wclass = wclass or self.args.cls or appname
+            wclass = wclass or getattr(startup_session, 'os_window_class', None) or self.args.cls or appname
             with startup_notification_handler(do_notify=startup_id is not None, startup_id=startup_id) as pre_show_callback:
                 os_window_id = create_os_window(
                         initial_window_size_func(opts_for_size, self.cached_values),
@@ -215,6 +216,7 @@ class Boss:
             for os_window_id, tm in self.os_window_map.items():
                 yield {
                     'id': os_window_id,
+                    'platform_window_id': platform_window_id(os_window_id),
                     'is_focused': tm is active_tab_manager,
                     'tabs': list(tm.list_tabs(active_tab, active_window)),
                 }
@@ -385,6 +387,8 @@ class Boss:
                 args.directory = os.path.join(data['cwd'], args.directory)
             for session in create_sessions(opts, args, respect_cwd=True):
                 os_window_id = self.add_os_window(session, wclass=args.cls, wname=args.name, opts_for_size=opts, startup_id=startup_id)
+                if opts.background_opacity != self.opts.background_opacity:
+                    self._set_os_window_background_opacity(os_window_id, opts.background_opacity)
                 if data.get('notify_on_os_window_death'):
                     self.os_window_death_actions[os_window_id] = partial(self.notify_on_os_window_death, data['notify_on_os_window_death'])
         else:
@@ -445,8 +449,34 @@ class Boss:
     def close_tab(self, tab: Optional[Tab] = None) -> None:
         tab = tab or self.active_tab
         if tab:
-            for window in tab:
-                self.close_window(window)
+            self.confirm_tab_close(tab)
+
+    def confirm_tab_close(self, tab: Tab) -> None:
+        windows = tuple(tab)
+        needs_confirmation = self.opts.confirm_os_window_close > 0 and len(windows) >= self.opts.confirm_os_window_close
+        if not needs_confirmation:
+            self.close_tab_no_confirm(tab)
+            return
+        self._run_kitten('ask', ['--type=yesno', '--message', _(
+            'Are you sure you want to close this tab, it has {}'
+            ' windows running?').format(len(windows))],
+            window=tab.active_window,
+            custom_callback=partial(self.handle_close_tab_confirmation, tab.id)
+        )
+
+    def handle_close_tab_confirmation(self, tab_id: int, data: Dict[str, Any], *a: Any) -> None:
+        if data['response'] != 'y':
+            return
+        for tab in self.all_tabs:
+            if tab.id == tab_id:
+                break
+        else:
+            return
+        self.close_tab_no_confirm(tab)
+
+    def close_tab_no_confirm(self, tab: Tab) -> None:
+        for window in tab:
+            self.close_window(window)
 
     def toggle_fullscreen(self) -> None:
         toggle_fullscreen()
@@ -854,6 +884,9 @@ class Boss:
                             add_history='history' in type_of_input,
                             add_wrap_markers='screen' in type_of_input
                     ).encode('utf-8')
+                elif type_of_input == 'selection':
+                    sel = self.data_for_at(which='@selection', window=w)
+                    data = sel.encode('utf-8') if sel else None
                 elif type_of_input is None:
                     data = None
                 else:
@@ -861,9 +894,16 @@ class Boss:
             else:
                 data = input_data if isinstance(input_data, bytes) else input_data.encode('utf-8')
             copts = common_opts_as_dict(self.opts)
+            final_args: List[str] = []
+            for x in args:
+                if x == '@selection':
+                    sel = self.data_for_at(which='@selection', window=w)
+                    if sel:
+                        x = sel
+                final_args.append(x)
             overlay_window = tab.new_special_window(
                 SpecialWindow(
-                    [kitty_exe(), '+runpy', 'from kittens.runner import main; main()'] + args,
+                    [kitty_exe(), '+runpy', 'from kittens.runner import main; main()'] + final_args,
                     stdin=data,
                     env={
                         'KITTY_COMMON_OPTS': json.dumps(copts),

@@ -41,11 +41,6 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 
-static void
-load_cursor_theme(_GLFWwindow* window) {
-    window->wl.cursorTheme = _wlCursorThemeManage(
-        _glfw.wl.cursorThemeManager, window->wl.cursorTheme, _wlCursorPxFromScale(window->wl.scale));
-}
 
 static void
 setCursorImage(_GLFWwindow* window)
@@ -63,18 +58,23 @@ setCursorImage(_GLFWwindow* window)
     } else
     {
         if (cursorWayland->scale != scale) {
-            if (!window->wl.cursorTheme) load_cursor_theme(window);
-            struct wl_cursor *newCursor = _glfwLoadCursor(cursorWayland->shape, window->wl.cursorTheme);
+            struct wl_cursor *newCursor = NULL;
+            struct wl_cursor_theme *theme = glfw_wlc_theme_for_scale(scale);
+            if (theme) newCursor = _glfwLoadCursor(cursorWayland->shape, theme);
             if (newCursor != NULL) {
                 cursorWayland->cursor = newCursor;
                 cursorWayland->scale = scale;
+                cursorWayland->currentImage = 0;
             } else {
                 _glfwInputError(GLFW_PLATFORM_ERROR, "Wayland: late cursor load failed; proceeding with existing cursor");
             }
         }
-        if (!cursorWayland->cursor)
+        if (!cursorWayland->cursor || !cursorWayland->cursor->image_count)
             return;
+        if (cursorWayland->currentImage >= cursorWayland->cursor->image_count) cursorWayland->currentImage = 0;
         image = cursorWayland->cursor->images[cursorWayland->currentImage];
+        if (!image) image = cursorWayland->cursor->images[0];
+        if (!image) return;
         buffer = wl_cursor_image_get_buffer(image);
         if (image->delay && window->cursor) {
             changeTimerInterval(&_glfw.wl.eventLoopData, _glfw.wl.cursorAnimationTimer, ms_to_monotonic_t(image->delay));
@@ -132,7 +132,6 @@ static bool checkScaleChange(_GLFWwindow* window)
     {
         window->wl.scale = scale;
         wl_surface_set_buffer_scale(window->wl.surface, scale);
-        load_cursor_theme(window);
         setCursorImage(window);
         return true;
     }
@@ -764,14 +763,18 @@ animateCursorImage(id_type timer_id UNUSED, void *data UNUSED) {
 
 static void
 abortOnFatalError(int last_error) {
-    _glfwInputError(GLFW_PLATFORM_ERROR, "Wayland: fatal display error: %s", strerror(last_error));
-    if (_glfw.callbacks.application_close) _glfw.callbacks.application_close(1);
-    else {
-        _GLFWwindow* window = _glfw.windowListHead;
-        while (window)
-        {
-            _glfwInputWindowCloseRequest(window);
-            window = window->next;
+    static bool abort_called = false;
+    if (!abort_called) {
+        abort_called = true;
+        _glfwInputError(GLFW_PLATFORM_ERROR, "Wayland: fatal display error: %s", strerror(last_error));
+        if (_glfw.callbacks.application_close) _glfw.callbacks.application_close(1);
+        else {
+            _GLFWwindow* window = _glfw.windowListHead;
+            while (window)
+            {
+                _glfwInputWindowCloseRequest(window);
+                window = window->next;
+            }
         }
     }
     // ensure the tick callback is called
@@ -937,12 +940,6 @@ int _glfwPlatformCreateWindow(_GLFWwindow* window,
 
 void _glfwPlatformDestroyWindow(_GLFWwindow* window)
 {
-    if (window->wl.cursorTheme) {
-        _wlCursorThemeManage(_glfw.wl.cursorThemeManager,
-                             window->wl.cursorTheme,
-                             0);
-        window->wl.cursorTheme = NULL;
-    }
     if (window == _glfw.wl.pointerFocus)
     {
         _glfw.wl.pointerFocus = NULL;
@@ -1075,8 +1072,10 @@ void _glfwPlatformGetFramebufferSize(_GLFWwindow* window,
                                      int* width, int* height)
 {
     _glfwPlatformGetWindowSize(window, width, height);
-    *width *= window->wl.scale;
-    *height *= window->wl.scale;
+    if (width)
+        *width *= window->wl.scale;
+    if (height)
+        *height *= window->wl.scale;
 }
 
 void _glfwPlatformGetWindowFrameSize(_GLFWwindow* window,
@@ -1261,6 +1260,19 @@ void _glfwPlatformSetWindowFloating(_GLFWwindow* window UNUSED, bool enabled UNU
     // TODO
     _glfwInputError(GLFW_FEATURE_UNIMPLEMENTED,
                     "Wayland: Window attribute setting not implemented yet");
+}
+
+void _glfwPlatformSetWindowMousePassthrough(_GLFWwindow* window, bool enabled)
+{
+    if (enabled)
+    {
+        struct wl_region* region = wl_compositor_create_region(_glfw.wl.compositor);
+        wl_surface_set_input_region(window->wl.surface, region);
+        wl_region_destroy(region);
+    }
+    else
+        wl_surface_set_input_region(window->wl.surface, 0);
+    wl_surface_commit(window->wl.surface);
 }
 
 float _glfwPlatformGetWindowOpacity(_GLFWwindow* window UNUSED)
@@ -2006,6 +2018,24 @@ const char* _glfwPlatformGetPrimarySelectionString(void)
         }
     }
     return NULL;
+}
+
+EGLenum _glfwPlatformGetEGLPlatform(EGLint** attribs UNUSED)
+{
+    if (_glfw.egl.EXT_platform_base && _glfw.egl.EXT_platform_wayland)
+        return EGL_PLATFORM_WAYLAND_EXT;
+    else
+        return 0;
+}
+
+EGLNativeDisplayType _glfwPlatformGetEGLNativeDisplay(void)
+{
+    return _glfw.wl.display;
+}
+
+EGLNativeWindowType _glfwPlatformGetEGLNativeWindow(_GLFWwindow* window)
+{
+    return window->wl.native;
 }
 
 void _glfwPlatformGetRequiredInstanceExtensions(char** extensions)

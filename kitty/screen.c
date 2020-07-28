@@ -123,7 +123,7 @@ new(PyTypeObject *type, PyObject *args, PyObject UNUSED *kwds) {
         ) {
             Py_CLEAR(self); return NULL;
         }
-        self->alt_tabstops = self->main_tabstops + self->columns * sizeof(bool);
+        self->alt_tabstops = self->main_tabstops + self->columns;
         self->tabstops = self->main_tabstops;
         init_tabstops(self->main_tabstops, self->columns);
         init_tabstops(self->alt_tabstops, self->columns);
@@ -137,7 +137,7 @@ static inline Line* range_line_(Screen *self, int y);
 
 void
 screen_reset(Screen *self) {
-    if (self->linebuf == self->alt_linebuf) screen_toggle_screen_buffer(self);
+    if (self->linebuf == self->alt_linebuf) screen_toggle_screen_buffer(self, true, true);
     if (self->overlay_line.is_active) deactivate_overlay_line(self);
     linebuf_clear(self->linebuf, BLANK_CHAR);
     historybuf_clear(self->historybuf);
@@ -236,7 +236,7 @@ screen_resize(Screen *self, unsigned int lines, unsigned int columns) {
     PyMem_Free(self->main_tabstops);
     self->main_tabstops = PyMem_Calloc(2*self->columns, sizeof(bool));
     if (self->main_tabstops == NULL) { PyErr_NoMemory(); return false; }
-    self->alt_tabstops = self->main_tabstops + self->columns * sizeof(bool);
+    self->alt_tabstops = self->main_tabstops + self->columns;
     self->tabstops = self->main_tabstops;
     init_tabstops(self->main_tabstops, self->columns);
     init_tabstops(self->alt_tabstops, self->columns);
@@ -641,12 +641,12 @@ screen_handle_graphics_command(Screen *self, const GraphicsCommand *cmd, const u
 
 
 void
-screen_toggle_screen_buffer(Screen *self) {
+screen_toggle_screen_buffer(Screen *self, bool save_cursor, bool clear_alt_screen) {
     bool to_alt = self->linebuf == self->main_linebuf;
     grman_clear(self->alt_grman, true, self->cell_size);  // always clear the alt buffer graphics to free up resources, since it has to be cleared when switching back to it anyway
     if (to_alt) {
-        linebuf_clear(self->alt_linebuf, BLANK_CHAR);
-        screen_save_cursor(self);
+        if (clear_alt_screen) linebuf_clear(self->alt_linebuf, BLANK_CHAR);
+        if (save_cursor) screen_save_cursor(self);
         self->linebuf = self->alt_linebuf;
         self->tabstops = self->alt_tabstops;
         self->grman = self->alt_grman;
@@ -655,7 +655,7 @@ screen_toggle_screen_buffer(Screen *self) {
     } else {
         self->linebuf = self->main_linebuf;
         self->tabstops = self->main_tabstops;
-        screen_restore_cursor(self);
+        if (save_cursor) screen_restore_cursor(self);
         self->grman = self->main_grman;
     }
     screen_history_scroll(self, SCROLL_FULL, false);
@@ -727,9 +727,14 @@ set_mode_from_const(Screen *self, unsigned int mode, bool val) {
         case CONTROL_CURSOR_BLINK:
             self->cursor->blink = val;
             break;
+        case SAVE_CURSOR:
+            screen_save_cursor(self);
+            break;
+        case TOGGLE_ALT_SCREEN_1:
+        case TOGGLE_ALT_SCREEN_2:
         case ALTERNATE_SCREEN:
-            if (val && self->linebuf == self->main_linebuf) screen_toggle_screen_buffer(self);
-            else if (!val && self->linebuf != self->main_linebuf) screen_toggle_screen_buffer(self);
+            if (val && self->linebuf == self->main_linebuf) screen_toggle_screen_buffer(self, mode == ALTERNATE_SCREEN, mode == ALTERNATE_SCREEN);
+            else if (!val && self->linebuf != self->main_linebuf) screen_toggle_screen_buffer(self, mode == ALTERNATE_SCREEN, mode == ALTERNATE_SCREEN);
             break;
         default:
             private = mode >= 1 << 5;
@@ -1188,12 +1193,14 @@ screen_erase_in_display(Screen *self, unsigned int how, bool private) {
                 line_apply_cursor(self->linebuf->line, self->cursor, 0, self->columns, true);
             }
             linebuf_mark_line_dirty(self->linebuf, i);
+            linebuf_mark_line_as_not_continued(self->linebuf, i);
         }
         self->is_dirty = true;
         self->selection = EMPTY_SELECTION;
     }
     if (how != 2) {
         screen_erase_in_line(self, how, private);
+        if (how == 1) linebuf_mark_line_as_not_continued(self->linebuf, self->cursor->y);
     }
     if (how == 3 && self->linebuf == self->main_linebuf) {
         historybuf_clear(self->historybuf);
@@ -1574,7 +1581,7 @@ screen_request_capabilities(Screen *self, char c, PyObject *q) {
 // Rendering {{{
 static inline void
 update_line_data(Line *line, unsigned int dest_y, uint8_t *data) {
-    size_t base = dest_y * line->xnum * sizeof(GPUCell);
+    size_t base = sizeof(GPUCell) * dest_y * line->xnum;
     memcpy(data + base, line->gpu_cells, line->xnum * sizeof(GPUCell));
 }
 
@@ -2392,7 +2399,7 @@ is_main_linebuf(Screen *self, PyObject *a UNUSED) {
 
 static PyObject*
 toggle_alt_screen(Screen *self, PyObject *a UNUSED) {
-    screen_toggle_screen_buffer(self);
+    screen_toggle_screen_buffer(self, true, true);
     Py_RETURN_NONE;
 }
 

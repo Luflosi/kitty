@@ -276,7 +276,7 @@ GLFW_CONTEXT_VERSION_MINOR: int
 GLFW_CONTEXT_REVISION: int
 GLFW_CONTEXT_ROBUSTNESS: int
 GLFW_OPENGL_FORWARD_COMPAT: int
-GLFW_OPENGL_DEBUG_CONTEXT: int
+GLFW_CONTEXT_DEBUG: int
 GLFW_OPENGL_PROFILE: int
 GLFW_OPENGL_API: int
 GLFW_OPENGL_ES_API: int
@@ -783,6 +783,10 @@ def is_emoji_presentation_base(code: int) -> bool:
 
 
 def x11_window_id(os_window_id: int) -> int:
+    pass
+
+
+def cocoa_window_id(os_window_id: int) -> int:
     pass
 
 

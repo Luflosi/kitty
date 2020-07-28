@@ -176,7 +176,7 @@ font_group_for(double font_sz_in_pts, double logical_dpi_x, double logical_dpi_y
 
 static inline void
 clear_canvas(FontGroup *fg) {
-    if (fg->canvas) memset(fg->canvas, 0, CELLS_IN_CANVAS * fg->cell_width * fg->cell_height * sizeof(pixel));
+    if (fg->canvas) memset(fg->canvas, 0, sizeof(pixel) * CELLS_IN_CANVAS * fg->cell_width * fg->cell_height);
 }
 
 
@@ -457,7 +457,7 @@ calc_cell_metrics(FontGroup *fg) {
     fg->cell_width = cell_width; fg->cell_height = cell_height;
     fg->baseline = baseline; fg->underline_position = underline_position; fg->underline_thickness = underline_thickness, fg->strikethrough_position = strikethrough_position, fg->strikethrough_thickness = strikethrough_thickness;
     free(fg->canvas);
-    fg->canvas = calloc(CELLS_IN_CANVAS * fg->cell_width * fg->cell_height, sizeof(pixel));
+    fg->canvas = calloc((size_t)CELLS_IN_CANVAS * fg->cell_width * fg->cell_height, sizeof(pixel));
     if (!fg->canvas) fatal("Out of memory allocating canvas for font group");
 }
 
@@ -1132,6 +1132,11 @@ render_run(FontGroup *fg, CPUCell *first_cpu_cell, GPUCell *first_gpu_cell, inde
     }
 }
 
+static inline bool
+is_non_emoji_dingbat(char_type ch) {
+    return 0x2700 <= ch && ch <= 0x27bf && !is_emoji(ch);
+}
+
 void
 render_line(FONTS_DATA_HANDLE fg_, Line *line, index_type lnum, Cursor *cursor, DisableLigature disable_ligature_strategy) {
 #define RENDER if (run_font_idx != NO_FONT && i > first_cell_in_run) { \
@@ -1154,7 +1159,7 @@ render_line(FONTS_DATA_HANDLE fg_, Line *line, index_type lnum, Cursor *cursor, 
 
         if (
                 cell_font_idx != MISSING_FONT &&
-                ((is_fallback_font && !is_emoji_presentation && is_symbol(cpu_cell->ch)) || (cell_font_idx != BOX_FONT && is_private_use(cpu_cell->ch)))
+                ((is_fallback_font && !is_emoji_presentation && is_symbol(cpu_cell->ch)) || (cell_font_idx != BOX_FONT && (is_private_use(cpu_cell->ch))) || is_non_emoji_dingbat(cpu_cell->ch))
         ) {
             unsigned int desired_cells = 1;
             if (cell_font_idx > 0) {
@@ -1168,7 +1173,7 @@ render_line(FONTS_DATA_HANDLE fg_, Line *line, index_type lnum, Cursor *cursor, 
             unsigned int num_spaces = 0;
             while ((line->cpu_cells[i+num_spaces+1].ch == ' ')
                     && num_spaces < MAX_NUM_EXTRA_GLYPHS_PUA
-                    && num_spaces < desired_cells
+                    && num_spaces + 1 < desired_cells
                     && i + num_spaces + 1 < line->xnum) {
                 num_spaces++;
                 // We have a private use char followed by space(s), render it as a multi-cell ligature.
@@ -1388,7 +1393,7 @@ concat_cells(PyObject UNUSED *self, PyObject *args) {
     PyObject *cells;
     if (!PyArg_ParseTuple(args, "IIpO!", &cell_width, &cell_height, &is_32_bit, &PyTuple_Type, &cells)) return NULL;
     size_t num_cells = PyTuple_GET_SIZE(cells), r, c, i;
-    PyObject *ans = PyBytes_FromStringAndSize(NULL, 4 * cell_width * cell_height * num_cells);
+    PyObject *ans = PyBytes_FromStringAndSize(NULL, (size_t)4 * cell_width * cell_height * num_cells);
     if (ans == NULL) return PyErr_NoMemory();
     pixel *dest = (pixel*)PyBytes_AS_STRING(ans);
     for (r = 0; r < cell_height; r++) {

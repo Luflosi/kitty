@@ -11,6 +11,7 @@
 #include "glfw-wrapper.h"
 extern bool cocoa_make_window_resizable(void *w, bool);
 extern void cocoa_focus_window(void *w);
+extern long cocoa_window_number(void *w);
 extern void cocoa_create_global_menu(void);
 extern void cocoa_hide_window_title(void *w);
 extern void cocoa_hide_titlebar(void *w);
@@ -364,6 +365,7 @@ static void
 application_close_requested_callback(int flags) {
     if (flags) {
         global_state.quit_request = IMPERATIVE_CLOSE_REQUESTED;
+        global_state.has_pending_closes = true;
         request_tick_callback();
     } else {
         if (global_state.quit_request == NO_CLOSE_REQUESTED) {
@@ -589,7 +591,7 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
 #endif
     if (!global_state.is_wayland) {
         // On Wayland windows dont get a content scale until they receive an enterEvent anyway
-        // which wont happen until the event loop ticks, so using a temp window is useless.
+        // which won't happen until the event loop ticks, so using a temp window is useless.
         temp_window = glfwCreateWindow(640, 480, "temp", NULL, common_context);
         if (temp_window == NULL) { fatal("Failed to create GLFW temp window! This usually happens because of old/broken OpenGL drivers. kitty requires working OpenGL 3.3 drivers."); }
     }
@@ -813,9 +815,6 @@ glfw_init(PyObject UNUSED *self, PyObject *args) {
     if (err) { PyErr_SetString(PyExc_RuntimeError, err); return NULL; }
     glfwSetErrorCallback(error_callback);
     glfwInitHint(GLFW_DEBUG_KEYBOARD, debug_keyboard);
-    // Joysticks cause slow startup on some linux systems, see
-    // https://github.com/kovidgoyal/kitty/issues/830
-    glfwInitHint(GLFW_ENABLE_JOYSTICKS, 0);
     OPT(debug_keyboard) = debug_keyboard != 0;
 #ifdef __APPLE__
     glfwInitHint(GLFW_COCOA_CHDIR_RESOURCES, 0);
@@ -1025,18 +1024,35 @@ x11_display(PYNOARG) {
     Py_RETURN_NONE;
 }
 
+static OSWindow*
+find_os_window(PyObject *os_wid) {
+    id_type os_window_id = PyLong_AsUnsignedLongLong(os_wid);
+    for (size_t i = 0; i < global_state.num_os_windows; i++) {
+        OSWindow *w = global_state.os_windows + i;
+        if (w->id == os_window_id) return w;
+    }
+    return NULL;
+}
+
 static PyObject*
 x11_window_id(PyObject UNUSED *self, PyObject *os_wid) {
-    if (glfwGetX11Window) {
-        id_type os_window_id = PyLong_AsUnsignedLongLong(os_wid);
-        for (size_t i = 0; i < global_state.num_os_windows; i++) {
-            OSWindow *w = global_state.os_windows + i;
-            if (w->id == os_window_id) return Py_BuildValue("l", (long)glfwGetX11Window(w->handle));
-        }
-    }
-    else { PyErr_SetString(PyExc_RuntimeError, "Failed to load glfwGetX11Window"); return NULL; }
-    PyErr_SetString(PyExc_ValueError, "No OSWindow with the specified id found");
+    OSWindow *w = find_os_window(os_wid);
+    if (!w) { PyErr_SetString(PyExc_ValueError, "No OSWindow with the specified id found"); return NULL; }
+    if (!glfwGetX11Window) { PyErr_SetString(PyExc_RuntimeError, "Failed to load glfwGetX11Window"); return NULL; }
+    return Py_BuildValue("l", (long)glfwGetX11Window(w->handle));
+}
+
+static PyObject*
+cocoa_window_id(PyObject UNUSED *self, PyObject *os_wid) {
+    OSWindow *w = find_os_window(os_wid);
+    if (!w) { PyErr_SetString(PyExc_ValueError, "No OSWindow with the specified id found"); return NULL; }
+    if (!glfwGetCocoaWindow) { PyErr_SetString(PyExc_RuntimeError, "Failed to load glfwGetCocoaWindow"); return NULL; }
+#ifdef __APPLE__
+    return Py_BuildValue("l", (long)cocoa_window_number(glfwGetCocoaWindow(w->handle)));
+#else
+    PyErr_SetString(PyExc_RuntimeError, "cocoa_window_id() is only supported on Mac");
     return NULL;
+#endif
 }
 
 static PyObject*
@@ -1078,7 +1094,7 @@ set_custom_cursor(PyObject *self UNUSED, PyObject *args) {
     size_t count = MIN((size_t)PyTuple_GET_SIZE(images), arraysz(gimages));
     for (size_t i = 0; i < count; i++) {
         if (!PyArg_ParseTuple(PyTuple_GET_ITEM(images, i), "s#ii", &gimages[i].pixels, &sz, &gimages[i].width, &gimages[i].height)) return NULL;
-        if (gimages[i].width * gimages[i].height * 4 != sz) {
+        if ((Py_ssize_t)gimages[i].width * gimages[i].height * 4 != sz) {
             PyErr_SetString(PyExc_ValueError, "The image data size does not match its width and height");
             return NULL;
         }
@@ -1220,6 +1236,7 @@ static PyMethodDef module_methods[] = {
 #ifndef __APPLE__
     METHODB(dbus_send_notification, METH_VARARGS),
 #endif
+    METHODB(cocoa_window_id, METH_O),
     {"glfw_init", (PyCFunction)glfw_init, METH_VARARGS, ""},
     {"glfw_terminate", (PyCFunction)glfw_terminate, METH_NOARGS, ""},
     {"glfw_get_physical_dpi", (PyCFunction)glfw_get_physical_dpi, METH_NOARGS, ""},
@@ -1531,7 +1548,7 @@ init_glfw(PyObject *m) {
     ADDC(GLFW_CONTEXT_REVISION);
     ADDC(GLFW_CONTEXT_ROBUSTNESS);
     ADDC(GLFW_OPENGL_FORWARD_COMPAT);
-    ADDC(GLFW_OPENGL_DEBUG_CONTEXT);
+    ADDC(GLFW_CONTEXT_DEBUG);
     ADDC(GLFW_OPENGL_PROFILE);
 
 // ---

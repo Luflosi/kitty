@@ -1176,15 +1176,26 @@ static void processEvent(XEvent *event)
     else if (event->type == _glfw.x11.xkb.eventBase)
     {
         XkbEvent *kb_event = (XkbEvent*)event;
+        if (kb_event->any.device != (unsigned int)_glfw.x11.xkb.keyboard_device_id) return;
         switch(kb_event->any.xkb_type) {
             case XkbNewKeyboardNotify: {
-                int32_t old_id = _glfw.x11.xkb.keyboard_device_id;
-                if (!glfw_xkb_update_x11_keyboard_id(&_glfw.x11.xkb)) return;
-                if (old_id != _glfw.x11.xkb.keyboard_device_id) keymap_dirty = true;
+                XkbNewKeyboardNotifyEvent *newkb_event = (XkbNewKeyboardNotifyEvent*)kb_event;
+                if (_glfw.hints.init.debugKeyboard) printf(
+                        "Got XkbNewKeyboardNotify event with changes: key codes: %d geometry: %d device id: %d\n",
+                        !!(newkb_event->changed & XkbNKN_KeycodesMask), !!(newkb_event->changed & XkbNKN_GeometryMask),
+                        !!(newkb_event->changed & XkbNKN_DeviceIDMask));
+                if (newkb_event->changed & XkbNKN_DeviceIDMask) {
+                    keymap_dirty = true;
+                    if (!glfw_xkb_update_x11_keyboard_id(&_glfw.x11.xkb)) return;
+                }
+                if (newkb_event->changed & XkbNKN_KeycodesMask) {
+                    keymap_dirty = true;
+                }
+                return;
             }
-                /* fallthrough */
             case XkbMapNotify:
             {
+                if (_glfw.hints.init.debugKeyboard) printf("Got XkbMapNotify event, keymaps will be reloaded\n");
                 keymap_dirty = true;
                 return;
             }
@@ -2449,13 +2460,19 @@ int _glfwPlatformWindowHovered(_GLFWwindow* window)
         int rootX, rootY, childX, childY;
         unsigned int mask;
 
-        if (!XQueryPointer(_glfw.x11.display, w,
-                           &root, &w, &rootX, &rootY, &childX, &childY, &mask))
-        {
-            return false;
-        }
+        _glfwGrabErrorHandlerX11();
 
-        if (w == window->x11.handle)
+        const Bool result = XQueryPointer(_glfw.x11.display, w,
+                                          &root, &w, &rootX, &rootY,
+                                          &childX, &childY, &mask);
+
+        _glfwReleaseErrorHandlerX11();
+
+        if (_glfw.x11.errorCode == BadWindow)
+            w = _glfw.x11.root;
+        else if (!result)
+            return false;
+        else if (w == window->x11.handle)
             return true;
     }
 
@@ -2569,6 +2586,25 @@ void _glfwPlatformSetWindowFloating(_GLFWwindow* window, bool enabled)
     XFlush(_glfw.x11.display);
 }
 
+void _glfwPlatformSetWindowMousePassthrough(_GLFWwindow* window, bool enabled)
+{
+    if (!_glfw.x11.xshape.available)
+        return;
+
+    if (enabled)
+    {
+        Region region = XCreateRegion();
+        XShapeCombineRegion(_glfw.x11.display, window->x11.handle,
+                            ShapeInput, 0, 0, region, ShapeSet);
+        XDestroyRegion(region);
+    }
+    else
+    {
+        XShapeCombineMask(_glfw.x11.display, window->x11.handle,
+                          ShapeInput, 0, 0, None, ShapeSet);
+    }
+}
+
 float _glfwPlatformGetWindowOpacity(_GLFWwindow* window)
 {
     float opacity = 1.f;
@@ -2617,7 +2653,8 @@ _glfwDispatchX11Events(void) {
     unsigned dispatched = 0;
 
 #if defined(__linux__)
-    if (_glfw.hints.init.enableJoysticks) _glfwDetectJoystickConnectionLinux();
+    if (_glfw.joysticksInitialized)
+        _glfwDetectJoystickConnectionLinux();
 #endif
     dispatched += dispatch_x11_queued_events(XEventsQueued(_glfw.x11.display, QueuedAfterFlush));
 
@@ -2842,6 +2879,55 @@ void _glfwPlatformSetPrimarySelectionString(const char* string)
 const char* _glfwPlatformGetPrimarySelectionString(void)
 {
     return getSelectionString(_glfw.x11.PRIMARY);
+}
+
+EGLenum _glfwPlatformGetEGLPlatform(EGLint** attribs)
+{
+    if (_glfw.egl.ANGLE_platform_angle)
+    {
+        int type = 0;
+
+        if (_glfw.egl.ANGLE_platform_angle_opengl)
+        {
+            if (_glfw.hints.init.angleType == GLFW_ANGLE_PLATFORM_TYPE_OPENGL)
+                type = EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE;
+        }
+
+        if (_glfw.egl.ANGLE_platform_angle_vulkan)
+        {
+            if (_glfw.hints.init.angleType == GLFW_ANGLE_PLATFORM_TYPE_VULKAN)
+                type = EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE;
+        }
+
+        if (type)
+        {
+            *attribs = calloc(5, sizeof(EGLint));
+            (*attribs)[0] = EGL_PLATFORM_ANGLE_TYPE_ANGLE;
+            (*attribs)[1] = type;
+            (*attribs)[2] = EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE;
+            (*attribs)[3] = EGL_PLATFORM_X11_EXT;
+            (*attribs)[4] = EGL_NONE;
+            return EGL_PLATFORM_ANGLE_ANGLE;
+        }
+    }
+
+    if (_glfw.egl.EXT_platform_base && _glfw.egl.EXT_platform_x11)
+        return EGL_PLATFORM_X11_EXT;
+
+    return 0;
+}
+
+EGLNativeDisplayType _glfwPlatformGetEGLNativeDisplay(void)
+{
+    return _glfw.x11.display;
+}
+
+EGLNativeWindowType _glfwPlatformGetEGLNativeWindow(_GLFWwindow* window)
+{
+    if (_glfw.egl.platform)
+        return &window->x11.handle;
+    else
+        return (EGLNativeWindowType) window->x11.handle;
 }
 
 void _glfwPlatformGetRequiredInstanceExtensions(char** extensions)

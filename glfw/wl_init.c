@@ -148,12 +148,9 @@ static void setCursor(GLFWCursorShape shape, _GLFWwindow* window)
     struct wl_surface* surface = _glfw.wl.cursorSurface;
     const int scale = window->wl.scale;
 
-    window->wl.cursorTheme = _wlCursorThemeManage(
-        _glfw.wl.cursorThemeManager,
-        window->wl.cursorTheme,
-        _wlCursorPxFromScale(scale)
-    ); 
-    cursor = _glfwLoadCursor(shape, window->wl.cursorTheme);
+    struct wl_cursor_theme *theme = glfw_wlc_theme_for_scale(scale);
+    if (!theme) return;
+    cursor = _glfwLoadCursor(shape, theme);
     if (!cursor) return;
     // TODO: handle animated cursors too.
     image = cursor->images[0];
@@ -337,9 +334,9 @@ static void pointerHandleAxis(void* data UNUSED,
            axis == WL_POINTER_AXIS_VERTICAL_SCROLL);
 
     if (axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL)
-        x = wl_fixed_to_double(value) * -1;
+        x = -wl_fixed_to_double(value);
     else if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
-        y = wl_fixed_to_double(value) * -1;
+        y = -wl_fixed_to_double(value);
 
     _glfwInputScroll(window, x, y, 1, _glfw.wl.xkb.states.modifiers);
 }
@@ -771,13 +768,6 @@ int _glfwPlatformInit(void)
     // Sync so we got all initial output events
     wl_display_roundtrip(_glfw.wl.display);
 
-#ifdef __linux__
-    if (_glfw.hints.init.enableJoysticks) {
-        if (!_glfwInitJoysticksLinux())
-            return false;
-    }
-#endif
-
     if (!_glfw.wl.wmBase)
     {
         _glfwInputError(GLFW_PLATFORM_ERROR,
@@ -787,13 +777,14 @@ int _glfwPlatformInit(void)
 
     if (_glfw.wl.shm)
     {
-        _glfw.wl.cursorThemeManager = _wlCursorThemeManagerDefault();
-        _glfw.wl.cursorSurface = 
+        _glfw.wl.cursorSurface =
             wl_compositor_create_surface(_glfw.wl.compositor);
     }
     else
     {
-        _glfw.wl.cursorThemeManager = NULL;
+        _glfwInputError(GLFW_PLATFORM_ERROR,
+                        "Wayland: Failed to find Wayland SHM");
+        return false;
     }
 
     return true;
@@ -801,9 +792,6 @@ int _glfwPlatformInit(void)
 
 void _glfwPlatformTerminate(void)
 {
-#ifdef __linux__
-    _glfwTerminateJoysticksLinux();
-#endif
     _glfwTerminateEGL();
     if (_glfw.wl.egl.handle)
     {
@@ -822,9 +810,7 @@ void _glfwPlatformTerminate(void)
 
     if (_glfw.wl.cursorSurface)
         wl_surface_destroy(_glfw.wl.cursorSurface);
-    if (_glfw.wl.cursorThemeManager) {
-        _wlCursorThemeManagerDestroy(_glfw.wl.cursorThemeManager);
-    }
+    glfw_wlc_destroy();
     if (_glfw.wl.subcompositor)
         wl_subcompositor_destroy(_glfw.wl.subcompositor);
     if (_glfw.wl.compositor)

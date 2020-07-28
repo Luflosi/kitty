@@ -1854,6 +1854,11 @@ void _glfwPlatformSetWindowFloating(_GLFWwindow* window, bool enabled)
         [window->ns.object setLevel:NSNormalWindowLevel];
 }
 
+void _glfwPlatformSetWindowMousePassthrough(_GLFWwindow* window, bool enabled)
+{
+    [window->ns.object setIgnoresMouseEvents:enabled];
+}
+
 float _glfwPlatformGetWindowOpacity(_GLFWwindow* window)
 {
     return (float) [window->ns.object alphaValue];
@@ -2103,6 +2108,47 @@ const char* _glfwPlatformGetClipboardString(void)
     _glfw.ns.clipboardString = _glfw_strdup([object UTF8String]);
 
     return _glfw.ns.clipboardString;
+}
+
+EGLenum _glfwPlatformGetEGLPlatform(EGLint** attribs)
+{
+    if (_glfw.egl.ANGLE_platform_angle)
+    {
+        int type = 0;
+
+        if (_glfw.egl.ANGLE_platform_angle_opengl)
+        {
+            if (_glfw.hints.init.angleType == GLFW_ANGLE_PLATFORM_TYPE_OPENGL)
+                type = EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE;
+        }
+
+        if (_glfw.egl.ANGLE_platform_angle_metal)
+        {
+            if (_glfw.hints.init.angleType == GLFW_ANGLE_PLATFORM_TYPE_METAL)
+                type = EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE;
+        }
+
+        if (type)
+        {
+            *attribs = calloc(3, sizeof(EGLint));
+            (*attribs)[0] = EGL_PLATFORM_ANGLE_TYPE_ANGLE;
+            (*attribs)[1] = type;
+            (*attribs)[2] = EGL_NONE;
+            return EGL_PLATFORM_ANGLE_ANGLE;
+        }
+    }
+
+    return 0;
+}
+
+EGLNativeDisplayType _glfwPlatformGetEGLNativeDisplay(void)
+{
+    return EGL_DEFAULT_DISPLAY;
+}
+
+EGLNativeWindowType _glfwPlatformGetEGLNativeWindow(_GLFWwindow* window)
+{
+    return window->ns.layer;
 }
 
 void _glfwPlatformGetRequiredInstanceExtensions(char** extensions)

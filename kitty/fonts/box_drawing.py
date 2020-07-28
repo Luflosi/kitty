@@ -8,10 +8,10 @@
 #
 
 import math
-from functools import partial as p
+from functools import partial as p, wraps
 from itertools import repeat
 from typing import (
-    Callable, Dict, Generator, Iterable, List, MutableSequence, Optional,
+    Any, Callable, Dict, Generator, Iterable, List, MutableSequence, Optional,
     Sequence, Tuple, cast
 )
 
@@ -146,18 +146,49 @@ def cross(buf: BufType, width: int, height: int, a: int = 1, b: int = 1, c: int 
     half_vline(buf, width, height, level=d, which='bottom')
 
 
+def downsample(src: BufType, dest: BufType, dest_width: int, dest_height: int, factor: int = 4) -> None:
+    src_width = 4 * dest_width
+
+    def average_intensity_in_src(dest_x: int, dest_y: int) -> int:
+        src_y = dest_y * factor
+        src_x = dest_x * factor
+        total = 0
+        for y in range(src_y, src_y + factor):
+            offset = src_width * y
+            for x in range(src_x, src_x + factor):
+                total += src[offset + x]
+        return total // (factor * factor)
+
+    for y in range(dest_height):
+        offset = dest_width * y
+        for x in range(dest_width):
+            dest[offset + x] = min(255, dest[offset + x] + average_intensity_in_src(x, y))
+
+
+def supersampled(supersample_factor: int = 4) -> Callable:
+    # Anti-alias the drawing performed by the wrapped function by
+    # using supersampling
+
+    class SSByteArray(bytearray):
+        supersample_factor = 1
+
+    def create_wrapper(f: Callable) -> Callable:
+        @wraps(f)
+        def supersampled_wrapper(buf: BufType, width: int, height: int, *args: Any, **kw: Any) -> None:
+            w, h = supersample_factor * width, supersample_factor * height
+            ssbuf = SSByteArray(w * h)
+            ssbuf.supersample_factor = supersample_factor
+            f(ssbuf, w, h, *args, **kw)
+            downsample(ssbuf, buf, width, height, factor=supersample_factor)
+        return supersampled_wrapper
+    return create_wrapper
+
+
 def fill_region(buf: BufType, width: int, height: int, xlimits: Iterable[Iterable[float]]) -> None:
     for y in range(height):
         offset = y * width
         for x, (upper, lower) in enumerate(xlimits):
             buf[x + offset] = 255 if upper <= y <= lower else 0
-    # Anti-alias the boundary, simple y-axis anti-aliasing
-    for x, limits in enumerate(xlimits):
-        for yf in limits:
-            for ypx in range(int(math.floor(yf)), int(math.ceil(yf)) + 1):
-                if 0 <= ypx < height:
-                    off = ypx * width + x
-                    buf[off] = min(255, buf[off] + int((1 - abs(yf - ypx)) * 255))
 
 
 def line_equation(x1: int, y1: int, x2: int, y2: int) -> Callable[[int], float]:
@@ -170,6 +201,7 @@ def line_equation(x1: int, y1: int, x2: int, y2: int) -> Callable[[int], float]:
     return y
 
 
+@supersampled()
 def triangle(buf: BufType, width: int, height: int, left: bool = True) -> None:
     ay1, by1, y2 = 0, height - 1, height // 2
     if left:
@@ -182,6 +214,7 @@ def triangle(buf: BufType, width: int, height: int, left: bool = True) -> None:
     fill_region(buf, width, height, xlimits)
 
 
+@supersampled()
 def corner_triangle(buf: BufType, width: int, height: int, corner: str) -> None:
     if corner == 'top-right' or corner == 'bottom-left':
         diagonal_y = line_equation(0, 0, width - 1, height - 1)
@@ -198,85 +231,35 @@ def corner_triangle(buf: BufType, width: int, height: int, corner: str) -> None:
     fill_region(buf, width, height, xlimits)
 
 
-def antialiased_1px_line(buf: BufType, width: int, height: int, p1: Tuple[int, int], p2: Tuple[int, int]) -> None:
-    # Draw an antialiased line using the Wu algorithm
-    x1, y1 = p1
-    x2, y2 = p2
-    dx, dy = x2 - x1, y2 - y1
-    off_limit = height * width
-    steep = abs(dx) < abs(dy)
+def thick_line(buf: BufType, width: int, height: int, thickness_in_pixels: int, p1: Tuple[int, int], p2: Tuple[int, int]) -> None:
+    if p1[0] > p2[0]:
+        p1, p2 = p2, p1
+    leq = line_equation(*p1, *p2)
+    delta, extra = divmod(thickness_in_pixels, 2)
 
-    if steep:
-        x1, y1, x2, y2, dx, dy = y1, x1, y2, x2, dy, dx
-
-        def p(x: int, y: int) -> Tuple[int, int]:
-            return y, x
-    else:
-        def p(x: int, y: int) -> Tuple[int, int]:
-            return x, y
-
-    if x2 < x1:
-        x1, x2, y1, y2 = x2, x1, y2, y1
-
-    def fpart(x: float) -> float:
-        return x - int(x)
-
-    def rfpart(x: float) -> float:
-        return 1 - fpart(x)
-
-    def putpixel(p: Tuple[int, int], alpha: float) -> None:
-        x, y = p
-        off = int(x + y * width)
-        if 0 <= off < off_limit:
-            buf[off] = int(min(buf[off] + (alpha * 255), 255))
-
-    def draw_endpoint(pt: Tuple[int, int]) -> int:
-        x, y = pt
-        xend = round(x)
-        yend = y + grad * (xend - x)
-        xgap = rfpart(x + 0.5)
-        px, py = int(xend), int(yend)
-        putpixel(p(px, py), rfpart(yend) * xgap)
-        putpixel(p(px, py+1), fpart(yend) * xgap)
-        return px
-
-    grad = dy/dx
-    intery = y1 + rfpart(x1) * grad
-
-    xstart = draw_endpoint(p(*p1))
-    xend = draw_endpoint(p(*p2))
-
-    if xstart > xend:
-        xstart, xend = xend, xstart
-    xstart += 1
-
-    for x in range(xstart, xend):
-        y = int(intery)
-        putpixel(p(x, y), rfpart(intery))
-        putpixel(p(x, y+1), fpart(intery))
-        intery += grad
+    for x in range(p1[0], p2[0] + 1):
+        if 0 <= x < width:
+            y_p = leq(x)
+            r = range(int(y_p) - delta, int(y_p) + delta + extra)
+            for y in r:
+                if 0 <= y < height:
+                    buf[x + y * width] = 255
 
 
-def antialiased_line(buf: BufType, width: int, height: int, p1: Tuple[int, int], p2: Tuple[int, int], level: int = 1) -> None:
-    th = thickness(level)
-    if th < 2:
-        return antialiased_1px_line(buf, width, height, p1, p2)
-    (x1, y1), (x2, y2) = p1, p2
-    dh = th // 2
-    items = range(-dh, dh + (th % 2))
-    for delta in items:
-        antialiased_1px_line(buf, width, height, (x1, y1 + delta), (x2, y2 + delta))
-
-
+@supersampled()
 def cross_line(buf: BufType, width: int, height: int, left: bool = True, level: int = 1) -> None:
     if left:
         p1, p2 = (0, 0), (width - 1, height - 1)
     else:
         p1, p2 = (width - 1, 0), (0, height - 1)
-    antialiased_line(buf, width, height, p1, p2, level=level)
+    supersample_factor = getattr(buf, 'supersample_factor')
+    thick_line(buf, width, height, supersample_factor * thickness(level), p1, p2)
 
 
+@supersampled()
 def half_cross_line(buf: BufType, width: int, height: int, which: str = 'tl', level: int = 1) -> None:
+    supersample_factor = getattr(buf, 'supersample_factor')
+    thickness_in_pixels = thickness(level) * supersample_factor
     my = (height - 1) // 2
     if which == 'tl':
         p1 = 0, 0
@@ -290,7 +273,7 @@ def half_cross_line(buf: BufType, width: int, height: int, which: str = 'tl', le
     else:
         p2 = width - 1, height - 1
         p1 = 0, my
-    antialiased_line(buf, width, height, p1, p2, level=level)
+    thick_line(buf, width, height, thickness_in_pixels, p1, p2)
 
 
 BezierFunc = Callable[[float], float]
@@ -360,6 +343,7 @@ def get_bezier_limits(bezier_x: BezierFunc, bezier_y: BezierFunc) -> Generator[T
         yield upper, lower
 
 
+@supersampled()
 def D(buf: BufType, width: int, height: int, left: bool = True) -> None:
     c1x = find_bezier_for_D(width, height)
     start = (0, 0)
@@ -378,6 +362,53 @@ def D(buf: BufType, width: int, height: int, left: bool = True) -> None:
             for src_x in range(width):
                 dest_x = width - 1 - src_x
                 buf[offset + dest_x] = mbuf[offset + src_x]
+
+
+def draw_parametrized_curve(buf: BufType, width: int, height: int, thickness_in_pixels: int, xfunc: BezierFunc, yfunc: BezierFunc) -> None:
+    num_samples = height*4
+    seen = set()
+    delta, extra = divmod(thickness_in_pixels, 2)
+    for i in range(num_samples + 1):
+        t = (i / num_samples)
+        p = x_p, y_p = int(xfunc(t)), int(yfunc(t))
+        if p in seen:
+            continue
+        seen.add(p)
+        for y in range(int(y_p) - delta, int(y_p) + delta + extra):
+            if 0 <= y < height:
+                offset = y * width
+                for x in range(int(x_p) - delta, int(x_p) + delta + extra):
+                    if 0 <= x < width:
+                        pos = offset + x
+                        buf[pos] = min(255, buf[pos] + 255)
+
+
+@supersampled()
+def rounded_corner(buf: BufType, width: int, height: int, level: int = 1, which: str = '╭') -> None:
+    supersample_factor = getattr(buf, 'supersample_factor')
+    thickness_in_pixels = thickness(level) * supersample_factor
+    if which == '╭':
+        start = width // 2, height - 1
+        end = width - 1, height // 2
+        c1 = width // 2, int(0.75 * height)
+        c2 = width // 2, height // 2 + 1
+    elif which == '╮':
+        start = 0, height // 2
+        end = width // 2, height - 1
+        c1 = width // 2, height // 2 + 1
+        c2 = width // 2, int(0.75 * height)
+    elif which == '╰':
+        start = width // 2, 0
+        end = width - 1, height // 2
+        c1 = width // 2, int(0.25 * height)
+        c2 = width // 2 - 1, height // 2 - 1
+    elif which == '╯':
+        start = 0, height // 2
+        end = width // 2, 0
+        c1 = width // 2 - 1, height // 2 - 1
+        c2 = width // 2, int(0.25 * height)
+    xfunc, yfunc = cubic_bezier(start, end, c1, c2)
+    draw_parametrized_curve(buf, width, height, thickness_in_pixels, xfunc, yfunc)
 
 
 def half_dhline(buf: BufType, width: int, height: int, level: int = 1, which: str = 'left', only: Optional[str] = None) -> Tuple[int, int]:
@@ -591,17 +622,29 @@ box_chars: Dict[str, List[Callable]] = {
     '': [p(corner_triangle, corner='top-right')],
     '═': [dhline],
     '║': [dvline],
+
     '╞': [vline, p(half_dhline, which='right')],
+
     '╡': [vline, half_dhline],
+
     '╥': [hline, p(half_dvline, which='bottom')],
+
     '╨': [hline, half_dvline],
+
     '╪': [vline, half_dhline, p(half_dhline, which='right')],
+
     '╫': [hline, half_dvline, p(half_dvline, which='bottom')],
+
     '╬': [p(inner_corner, which=x) for x in 'tl tr bl br'.split()],
+
     '╠': [p(inner_corner, which='tr'), p(inner_corner, which='br'), p(dvline, only='left')],
+
     '╣': [p(inner_corner, which='tl'), p(inner_corner, which='bl'), p(dvline, only='right')],
+
     '╦': [p(inner_corner, which='bl'), p(inner_corner, which='br'), p(dhline, only='top')],
+
     '╩': [p(inner_corner, which='tl'), p(inner_corner, which='tr'), p(dhline, only='bottom')],
+
     '╱': [p(cross_line, left=False)],
     '╲': [cross_line],
     '╳': [cross_line, p(cross_line, left=False)],
@@ -643,8 +686,8 @@ t, f = 1, 3
 for start in '┌┐└┘':
     for i, (hlevel, vlevel) in enumerate(((t, t), (f, t), (t, f), (f, f))):
         box_chars[chr(ord(start) + i)] = [p(corner, which=start, hlevel=hlevel, vlevel=vlevel)]
-for ch, c in zip('╭╮╯╰', '┌┐┘└'):
-    box_chars[ch] = [p(corner, which=c)]  # TODO: Make these rounded
+for ch in '╭╮╯╰':
+    box_chars[ch] = [p(rounded_corner, which=ch)]
 
 for i, (a_, b_, c_, d_) in enumerate((
         (t, t, t, t), (f, t, t, t), (t, f, t, t), (f, f, t, t), (t, t, f, t), (t, t, t, f), (t, t, f, f),

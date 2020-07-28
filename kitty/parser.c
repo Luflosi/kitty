@@ -225,9 +225,9 @@ handle_esc_mode_char(Screen *screen, uint32_t ch, PyObject DUMP_UNUSED *dump_cal
                     CALL_ED(screen_save_cursor); break;
                 case ESC_DECRC:
                     CALL_ED(screen_restore_cursor); break;
-                case ESC_DECPNM:
+                case ESC_DECKPNM:
                     CALL_ED(screen_normal_keypad_mode); break;
-                case ESC_DECPAM:
+                case ESC_DECKPAM:
                     CALL_ED(screen_alternate_keypad_mode); break;
                 case '%':
                 case '(':
@@ -387,10 +387,10 @@ static inline const char*
 repr_csi_params(unsigned int *params, unsigned int num_params) {
     if (!num_params) return "";
     static char buf[256];
-    unsigned int pos = 0;
-    while (pos < 200 && num_params && sizeof(buf) > pos + 1) {
-        const char *fmt = num_params > 1 ? "%u " : "%u";
-        int ret = snprintf(buf + pos, sizeof(buf) - pos - 1, fmt, params[num_params--]);
+    unsigned int pos = 0, i = 0;
+    while (pos < 200 && i++ < num_params && sizeof(buf) > pos + 1) {
+        const char *fmt = i < num_params ? "%u, " : "%u";
+        int ret = snprintf(buf + pos, sizeof(buf) - pos - 1, fmt, params[i-1]);
         if (ret < 0) return "An error occurred formatting the params array";
         pos += ret;
     }
@@ -783,6 +783,12 @@ dispatch_csi(Screen *screen, PyObject DUMP_UNUSED *dump_callback) {
                 REPORT_ERROR("Unknown DECSTR CSI sequence with start and end modifiers: '%c' '%c'", start_modifier, end_modifier);
             }
             break;
+        case 'm':
+            if (start_modifier == '>' && (!end_modifier || end_modifier == ';')) {
+                REPORT_ERROR("Ignoring xterm specific key modifier resource options (CSI > m)");
+                break;
+            }
+            /* fallthrough */
         default:
             REPORT_ERROR("Unknown CSI code: '%s' with start_modifier: '%c' and end_modifier: '%c' and parameters: '%s'", utf8(code), start_modifier, end_modifier, repr_csi_params(params, num_params));
     }
@@ -847,7 +853,8 @@ dispatch_dcs(Screen *screen, PyObject DUMP_UNUSED *dump_callback) {
 #undef CMD_PREFIX
 #define PRINT_PREFIX "kitty-print|"
             } else if (startswith(screen->parser_buf + 1, screen->parser_buf_pos - 1, PRINT_PREFIX)) {
-                PyObject *msg = PyUnicode_FromKindAndData(PyUnicode_4BYTE_KIND, screen->parser_buf + sizeof(PRINT_PREFIX), screen->parser_buf_pos - sizeof(PRINT_PREFIX));
+                const size_t pp_size = sizeof(PRINT_PREFIX);
+                PyObject *msg = PyUnicode_FromKindAndData(PyUnicode_4BYTE_KIND, screen->parser_buf + pp_size, screen->parser_buf_pos - pp_size);
                 if (msg != NULL) {
                     REPORT_OSC2(screen_handle_print, (char)screen->parser_buf[0], msg);
                     screen_handle_print(screen, msg);
