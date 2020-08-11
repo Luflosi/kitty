@@ -1,4 +1,4 @@
-// unicode data, built from the unicode standard on: 2020-04-06
+// unicode data, built from the unicode standard on: 2020-08-06
 // see gen-wcwidth.py
 #pragma once
 #include "data-types.h"
@@ -7,6 +7,7 @@ START_ALLOW_CASE_RANGE
 
 static int
 wcwidth_std(int32_t code) {
+	if (LIKELY(0x20 <= code && code <= 0x7e)) return 1;
 	switch(code) {
 		// Flags (26 codepoints) {{{
 		case 0x1f1e6 ... 0x1f1ff:

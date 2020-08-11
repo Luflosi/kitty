@@ -20,7 +20,7 @@ class Version(NamedTuple):
 
 
 appname: str = 'kitty'
-version: Version = Version(0, 18, 2)
+version: Version = Version(0, 18, 3)
 str_version: str = '.'.join(map(str, version))
 _plat = sys.platform.lower()
 is_macos: bool = 'darwin' in _plat
@@ -64,16 +64,16 @@ class WindowGeometry(NamedTuple):
 def kitty_exe() -> str:
     rpath = sys._xoptions.get('bundle_exe_dir')
     if not rpath:
-        items = filter(None, os.environ.get('PATH', '').split(os.pathsep))
+        items = os.environ.get('PATH', '').split(os.pathsep) + [os.path.join(base, 'launcher')]
         seen: Set[str] = set()
-        for candidate in items:
+        for candidate in filter(None, items):
             if candidate not in seen:
                 seen.add(candidate)
                 if os.access(os.path.join(candidate, 'kitty'), os.X_OK):
                     rpath = candidate
                     break
         else:
-            rpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'launcher')
+            raise RuntimeError('kitty binary not found')
     return os.path.join(rpath, 'kitty')
 
 
@@ -146,7 +146,7 @@ def wakeup() -> None:
         b.child_monitor.wakeup()
 
 
-base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+base_dir = os.path.dirname(base)
 terminfo_dir = os.path.join(base_dir, 'terminfo')
 logo_data_file = os.path.join(base_dir, 'logo', 'kitty.rgba')
 logo_png_file = os.path.join(base_dir, 'logo', 'kitty.png')

@@ -274,7 +274,9 @@ def category_test(
     comment: str,
     use_static: bool = False,
     extra_chars: Union[FrozenSet[int], Set[int]] = frozenset(),
-    exclude: Union[Set[int], FrozenSet[int]] = frozenset()
+    exclude: Union[Set[int], FrozenSet[int]] = frozenset(),
+    least_check_return: Optional[str] = None,
+    ascii_range: Optional[str] = None
 ) -> None:
     static = 'static inline ' if use_static else ''
     chars: Set[int] = set()
@@ -284,6 +286,11 @@ def category_test(
     chars -= exclude
     p(f'{static}bool\n{name}(char_type code) {{')
     p(f'\t// {comment} ({len(chars)} codepoints)' + ' {{' '{')
+    if least_check_return is not None:
+        least = min(chars)
+        p(f'\tif (LIKELY(code < {least})) return {least_check_return};')
+    if ascii_range is not None:
+        p(f'\tif (LIKELY(0x20 <= code && code <= 0x7e)) return {ascii_range};')
     p('\tswitch(code) {')
     for spec in get_ranges(list(chars)):
         write_case(spec, p)
@@ -337,11 +344,15 @@ def gen_ucd() -> None:
                 {c for c in class_maps if c.startswith('M')},
                 'M category (marks)',
                 # See https://github.com/harfbuzz/harfbuzz/issues/169
-                extra_chars=emoji_skin_tone_modifiers | {zwj}
+                extra_chars=emoji_skin_tone_modifiers | {zwj},
+                least_check_return='false'
         )
         category_test(
             'is_ignored_char', p, 'Cc Cf Cs'.split(),
-            'Control characters and non-characters', extra_chars=non_characters, exclude={zwj})
+            'Control characters and non-characters',
+            extra_chars=non_characters, exclude={zwj},
+            ascii_range='false'
+        )
         category_test('is_word_char', p, {c for c in class_maps if c[0] in 'LN'}, 'L and N categories')
         category_test('is_CZ_category', p, cz, 'C and Z categories')
         category_test('is_P_category', p, {c for c in class_maps if c[0] == 'P'}, 'P category (punctuation)')
@@ -421,7 +432,7 @@ def gen_names() -> None:
         p('}; // }}}\n')
 
         # The trie
-        p('typedef struct {{ uint32_t children_offset; uint32_t match_offset; }} word_trie;\n')
+        p('typedef struct { uint32_t children_offset; uint32_t match_offset; } word_trie;\n')
         all_trie_nodes: List['TrieNode'] = []  # noqa
 
         class TrieNode:
@@ -482,6 +493,7 @@ def gen_wcwidth() -> None:
 
     with create_header('kitty/wcwidth-std.h') as p:
         p('static int\nwcwidth_std(int32_t code) {')
+        p('\tif (LIKELY(0x20 <= code && code <= 0x7e)) return 1;')
         p('\tswitch(code) {')
 
         non_printing = class_maps['Cc'] | class_maps['Cf'] | class_maps['Cs']

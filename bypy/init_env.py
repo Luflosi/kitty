@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+from contextlib import suppress
 
 from bypy.constants import (
     LIBDIR, PREFIX, PYTHON, SRC as KITTY_DIR, ismacos, worker_env
@@ -47,6 +48,16 @@ def build_c_extensions(ext_dir, args):
     shutil.copytree(
         KITTY_DIR, writeable_src_dir, symlinks=True,
         ignore=shutil.ignore_patterns('b', 'build', 'dist', '*_commands.json', '*.o'))
+
+    # Build the launcher as it is needed for the spawn test
+    with suppress(FileNotFoundError):
+        os.remove(os.path.join(writeable_src_dir, 'kitty', 'launcher', 'kitty'))
+    if run(PYTHON, 'setup.py', 'build-launcher', cwd=writeable_src_dir) != 0:
+        print('Building of kitty launcher failed', file=sys.stderr)
+        os.chdir(KITTY_DIR)
+        run_shell()
+        raise SystemExit('Building of kitty launcher failed')
+
     cmd = [PYTHON, 'setup.py']
     bundle = 'macos-freeze' if ismacos else 'linux-freeze'
     cmd.append(bundle)

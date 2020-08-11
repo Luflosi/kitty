@@ -1,4 +1,4 @@
-// unicode data, built from the unicode standard on: 2020-04-06
+// unicode data, built from the unicode standard on: 2020-08-06
 // see gen-wcwidth.py
 #include "data-types.h"
 
@@ -8,6 +8,7 @@ START_ALLOW_CASE_RANGE
 bool
 is_combining_char(char_type code) {
 	// M category (marks) (2301 codepoints) {{{
+	if (LIKELY(code < 768)) return false;
 	switch(code) {
 		case 0x300 ... 0x36f:
 			return true;
@@ -601,6 +602,7 @@ is_combining_char(char_type code) {
 bool
 is_ignored_char(char_type code) {
 	// Control characters and non-characters (2339 codepoints) {{{
+	if (LIKELY(0x20 <= code && code <= 0x7e)) return false;
 	switch(code) {
 		case 0x0 ... 0x1f:
 			return true;
