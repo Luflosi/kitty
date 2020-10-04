@@ -13,6 +13,8 @@
 #endif
 #include "data-types.h"
 #include "control-codes.h"
+#include "wcwidth-std.h"
+#include "wcswidth.h"
 #include "modes.h"
 #include <stddef.h>
 #include <termios.h>
@@ -148,7 +150,15 @@ close_tty(PyObject *self UNUSED, PyObject *args) {
 
 #undef TTY_ARGS
 
+static PyObject*
+wcwidth_wrap(PyObject UNUSED *self, PyObject *chr) {
+    return PyLong_FromLong(wcwidth_std(PyLong_AsLong(chr)));
+}
+
+
 static PyMethodDef module_methods[] = {
+    {"wcwidth", (PyCFunction)wcwidth_wrap, METH_O, ""},
+    {"wcswidth", (PyCFunction)wcswidth_std, METH_O, ""},
     {"open_tty", open_tty, METH_VARARGS, ""},
     {"normal_tty", normal_tty, METH_VARARGS, ""},
     {"raw_tty", raw_tty, METH_VARARGS, ""},
