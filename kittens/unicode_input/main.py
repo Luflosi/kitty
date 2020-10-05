@@ -289,7 +289,7 @@ class UnicodeInput(Handler):
         self.line_edit = LineEdit()
         self.recent = list(self.cached_values.get('recent', DEFAULT_SET))
         self.current_char: Optional[str] = None
-        self.prompt_template = '{}> '
+        self.prompt_template = '{}' + colored('❯', 'blue') + ' '
         self.last_updated_code_point_at: Optional[Tuple[str, Union[Sequence[int], None, str]]] = None
         self.choice_line = ''
         self.mode = globals().get(cached_values.get('mode', 'HEX'), 'HEX')
