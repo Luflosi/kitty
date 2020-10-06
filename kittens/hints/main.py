@@ -236,6 +236,11 @@ def postprocessor(func: PostprocessorFunc) -> PostprocessorFunc:
     return func
 
 
+class InvalidMatch(Exception):
+    """Raised when a match turns out to be invalid."""
+    pass
+
+
 @postprocessor
 def url(text: str, s: int, e: int) -> Tuple[int, int]:
     if s > 4 and text[s - 5:s] == 'link:':  # asciidoc URLs
@@ -280,11 +285,29 @@ def quotes(text: str, s: int, e: int) -> Tuple[int, int]:
     return s, e
 
 
+@postprocessor
+def ip(text: str, s: int, e: int) -> Tuple[int, int]:
+    from ipaddress import ip_address
+    # Check validity of IPs (or raise InvalidMatch)
+    ip = text[s:e]
+
+    try:
+        ip_address(ip)
+    except Exception:
+        raise InvalidMatch("Invalid IP")
+
+    return s, e
+
+
 def mark(pattern: str, post_processors: Iterable[PostprocessorFunc], text: str, args: HintsCLIOptions) -> Generator[Mark, None, None]:
     pat = re.compile(pattern)
     for idx, (s, e, groupdict) in enumerate(regex_finditer(pat, args.minimum_match_length, text)):
-        for func in post_processors:
-            s, e = func(text, s, e)
+        try:
+            for func in post_processors:
+                s, e = func(text, s, e)
+        except InvalidMatch:
+            continue
+
         mark_text = text[s:e].replace('\n', '').replace('\0', '')
         yield Mark(idx, s, e, mark_text, groupdict)
 
@@ -325,6 +348,15 @@ def functions_for(args: HintsCLIOptions) -> Tuple[str, List[PostprocessorFunc]]:
         pattern = '(?m)^\\s*(.+)[\\s\0]*$'
     elif args.type == 'hash':
         pattern = '[0-9a-f]{7,128}'
+    elif args.type == 'ip':
+        pattern = (
+            # # IPv4 with no validation
+            r"((?:\d{1,3}\.){3}\d{1,3}"
+            r"|"
+            # # IPv6 with no validation
+            r"(?:[a-fA-F0-9]{0,4}:){2,7}[a-fA-F0-9]{1,4})"
+        )
+        post_processors.append(ip)
     elif args.type == 'word':
         chars = args.word_characters
         if chars is None:
@@ -402,7 +434,7 @@ def process_hyperlinks(text: str) -> Tuple[str, Tuple[Mark, ...]]:
         active_hyperlink_start_offset = 0
         idx += 1
 
-    def process_hyperlink(m: re.Match) -> str:
+    def process_hyperlink(m: 're.Match') -> str:
         nonlocal removed_size, active_hyperlink_url, active_hyperlink_id, active_hyperlink_start_offset
         raw = m.group()
         start = m.start() - removed_size
@@ -482,7 +514,7 @@ programs.
 
 --type
 default=url
-choices=url,regex,path,line,hash,word,linenum,hyperlink
+choices=url,regex,path,line,hash,word,linenum,hyperlink,ip
 The type of text to search for. A value of :code:`linenum` is special, it looks
 for error messages using the pattern specified with :option:`--regex`, which
 must have the named groups, :code:`path` and :code:`line`. If not specified,
