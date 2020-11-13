@@ -7,7 +7,7 @@ import re
 from contextlib import suppress
 from functools import lru_cache
 from hashlib import md5
-from mimetypes import guess_type
+from kitty.guess_mime_type import guess_type
 from typing import TYPE_CHECKING, Dict, List, Set, Optional, Iterator, Tuple, Union
 
 if TYPE_CHECKING:
@@ -68,7 +68,10 @@ class Collection:
             self.removed_count += len(lines_for_path(left_path))
 
     def finalize(self) -> None:
-        self.all_paths.sort(key=path_name_map.get)
+        def key(x: str) -> str:
+            return path_name_map.get(x, '')
+
+        self.all_paths.sort(key=key)
 
     def __iter__(self) -> Iterator[Tuple[str, str, Optional[str]]]:
         for path in self.all_paths:
@@ -133,7 +136,7 @@ def sanitize(text: str) -> str:
 
 @lru_cache(maxsize=1024)
 def mime_type_for_path(path: str) -> str:
-    return guess_type(path)[0] or 'application/octet-stream'
+    return guess_type(path) or 'application/octet-stream'
 
 
 @lru_cache(maxsize=1024)

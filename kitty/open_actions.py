@@ -17,6 +17,7 @@ from .config import KeyAction, parse_key_action
 from .constants import config_dir
 from .typing import MatchType
 from .utils import expandvars, log_error
+from .guess_mime_type import guess_type
 
 
 class MatchCriteria(NamedTuple):
@@ -75,12 +76,8 @@ def url_matches_criterion(purl: 'ParseResult', url: str, unquoted_path: str, mc:
 
     if mc.type == 'mime':
         import fnmatch
-        from mimetypes import guess_type
-        try:
-            mt = guess_type(unquoted_path)[0]
-        except Exception:
-            return False
-        if mt is None:
+        mt = guess_type(unquoted_path)
+        if not mt:
             return False
         mt = mt.lower()
         for mpat in mc.value.split(','):
@@ -161,8 +158,14 @@ def actions_for_url_from_list(url: str, actions: Iterable[OpenAction]) -> Genera
     }
 
     def expand(x: Any) -> Any:
+        as_bytes = isinstance(x, bytes)
+        if as_bytes:
+            x = x.decode('utf-8')
         if isinstance(x, str):
-            return expandvars(x, env, fallback_to_os_env=False)
+            ans = expandvars(x, env, fallback_to_os_env=False)
+            if as_bytes:
+                return ans.encode('utf-8')
+            return ans
         return x
 
     for action in actions:

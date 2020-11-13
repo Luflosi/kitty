@@ -200,14 +200,9 @@ cocoa_send_notification(PyObject *self UNUSED, PyObject *args) {
     if (!center) {PyErr_SetString(PyExc_RuntimeError, "Failed to get the user notification center"); return NULL; }
     if (!center.delegate) center.delegate = [[NotificationDelegate alloc] init];
     NSUserNotification *n = [NSUserNotification new];
-#define SET(x) { \
-    if (x) { \
-        NSString *t = @(x); \
-        n.x = t; \
-        [t release]; \
-    }}
-    SET(title); SET(subtitle); SET(informativeText);
-#undef SET
+    if (title) n.title = @(title);
+    if (subtitle) n.subtitle = @(subtitle);
+    if (informativeText) n.informativeText = @(informativeText);
     if (identifier) {
         n.userInfo = @{@"user_id": @(identifier)};
     }
@@ -325,17 +320,17 @@ cocoa_send_notification(PyObject *self UNUSED, PyObject *args) {
 
 @implementation ServiceProvider
 
-- (void)openTab:(NSPasteboard*)pasteboard
+- (BOOL)openTab:(NSPasteboard*)pasteboard
         userData:(NSString *) UNUSED userData error:(NSError **) UNUSED error {
-    [self openFilesFromPasteboard:pasteboard type:NEW_TAB_WITH_WD];
+    return [self openFilesFromPasteboard:pasteboard type:NEW_TAB_WITH_WD];
 }
 
-- (void)openOSWindow:(NSPasteboard*)pasteboard
+- (BOOL)openOSWindow:(NSPasteboard*)pasteboard
         userData:(NSString *) UNUSED userData  error:(NSError **) UNUSED error {
-    [self openFilesFromPasteboard:pasteboard type:NEW_OS_WINDOW_WITH_WD];
+    return [self openFilesFromPasteboard:pasteboard type:NEW_OS_WINDOW_WITH_WD];
 }
 
-- (void)openFilesFromPasteboard:(NSPasteboard *)pasteboard type:(int)type {
+- (BOOL)openFilesFromPasteboard:(NSPasteboard *)pasteboard type:(int)type {
     NSDictionary *options = @{ NSPasteboardURLReadingFileURLsOnlyKey: @YES };
     NSArray *filePathArray = [pasteboard readObjectsForClasses:[NSArray arrayWithObject:[NSURL class]] options:options];
     for (NSURL *url in filePathArray) {
@@ -348,6 +343,7 @@ cocoa_send_notification(PyObject *self UNUSED, PyObject *args) {
             set_cocoa_pending_action(type, [path UTF8String]);
         }
     }
+    return YES;
 }
 
 @end
