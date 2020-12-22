@@ -181,11 +181,14 @@ class SignalManager:
             signal.SIGWINCH, signal.SIGINT, signal.SIGTERM)))
 
 
+sanitize_bracketed_paste: str = '[\x03\x04\x0e\x0f\r\x07\x7f\x8d\x8e\x8f\x90\x9b\x9d\x9e\x9f]'
+
+
 class Loop:
 
     def __init__(
         self,
-        sanitize_bracketed_paste: str = '[\x03\x04\x0e\x0f\r\x07\x7f\x8d\x8e\x8f\x90\x9b\x9d\x9e\x9f]',
+        sanitize_bracketed_paste: str = sanitize_bracketed_paste,
         optional_actions: int = termios.TCSADRAIN
     ):
         if is_macos:
@@ -299,7 +302,7 @@ class Loop:
     def _on_apc(self, apc: str) -> None:
         if apc.startswith('K'):
             try:
-                k = decode_key_event(apc)
+                k = decode_key_event(apc[1:])
             except Exception:
                 pass
             else:
@@ -321,13 +324,17 @@ class Loop:
             self.write_buf[self.iov_limit - 1] = b''.join(self.write_buf[self.iov_limit - 1:])
             del self.write_buf[self.iov_limit:]
         sizes = tuple(map(len, self.write_buf))
-        try:
-            written = os.writev(fd, self.write_buf)
-        except BlockingIOError:
-            return
-        if not written:
-            raise EOFError('The output stream is closed')
-        if written >= sum(sizes):
+        total_size = sum(sizes)
+        if total_size:
+            try:
+                written = os.writev(fd, self.write_buf)
+            except BlockingIOError:
+                return
+            if not written:
+                raise EOFError('The output stream is closed')
+        else:
+            written = 0
+        if written >= total_size:
             self.write_buf: List[bytes] = []
             self.asycio_loop.remove_writer(fd)
             self.waiting_for_writes = False

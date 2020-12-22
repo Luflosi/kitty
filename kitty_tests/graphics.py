@@ -48,6 +48,15 @@ def parse_response(res):
     return res.decode('ascii').partition(';')[2].partition('\033')[0]
 
 
+def parse_response_with_ids(res):
+    if not res:
+        return
+    a, b = res.decode('ascii').split(';', 1)
+    code = b.partition('\033')[0].split(':', 1)[0]
+    a = a.split('G', 1)[1]
+    return code, a
+
+
 all_bytes = bytes(bytearray(range(256)))
 
 
@@ -90,20 +99,23 @@ def put_helpers(self, cw, ch):
         s = self.create_screen(10, 5, cell_width=cw, cell_height=ch)
         return s, 2 / s.columns, 2 / s.lines
 
-    def put_cmd(z=0, num_cols=0, num_lines=0, x_off=0, y_off=0, width=0, height=0, cell_x_off=0, cell_y_off=0):
-        return 'z=%d,c=%d,r=%d,x=%d,y=%d,w=%d,h=%d,X=%d,Y=%d' % (z, num_cols, num_lines, x_off, y_off, width, height, cell_x_off, cell_y_off)
+    def put_cmd(z=0, num_cols=0, num_lines=0, x_off=0, y_off=0, width=0, height=0, cell_x_off=0, cell_y_off=0, placement_id=0):
+        return 'z=%d,c=%d,r=%d,x=%d,y=%d,w=%d,h=%d,X=%d,Y=%d,p=%d' % (
+            z, num_cols, num_lines, x_off, y_off, width, height, cell_x_off, cell_y_off, placement_id)
 
     def put_image(screen, w, h, **kw):
         nonlocal iid
         iid += 1
-        cmd = 'a=T,f=24,i=%d,s=%d,v=%d,%s' % (iid, w, h, put_cmd(**kw))
+        imgid = kw.pop('id', None) or iid
+        cmd = 'a=T,f=24,i=%d,s=%d,v=%d,%s' % (imgid, w, h, put_cmd(**kw))
         data = b'x' * w * h * 3
         res = send_command(screen, cmd, data)
-        return iid, parse_response(res)
+        return imgid, parse_response(res)
 
     def put_ref(screen, **kw):
-        cmd = 'a=p,i=%d,%s' % (iid, put_cmd(**kw))
-        send_command(screen, cmd)
+        imgid = kw.pop('id', None) or iid
+        cmd = 'a=p,i=%d,%s' % (imgid, put_cmd(**kw))
+        return imgid, parse_response_with_ids(send_command(screen, cmd))
 
     def layers(screen, scrolled_by=0, xstart=-1, ystart=1):
         return screen.grman.update_layers(scrolled_by, xstart, ystart, dx, dy, screen.columns, screen.lines, cw, ch)
@@ -125,6 +137,7 @@ class TestGraphics(BaseTest):
 
         # Test load query
         self.ae(l('abcd', s=1, v=1, a='q'), 'OK')
+        self.assertIsNone(l('abcd', s=1, v=1, a='q', q=1))
         self.ae(g.image_count, 0)
 
         # Test simple load
@@ -140,6 +153,8 @@ class TestGraphics(BaseTest):
         self.ae(l('mnop', m=0), 'OK')
         img = g.image_for_client_id(1)
         self.ae(img['data'], b'abcdefghijklmnop')
+        self.ae(l('abcd', s=10, v=10, q=1), 'ENODATA:Insufficient image data: 4 < 400')
+        self.ae(l('abcd', s=10, v=10, q=2), None)
 
         # Test compression
         random_data = byte_block(3 * 1024)
@@ -212,6 +227,73 @@ class TestGraphics(BaseTest):
         # test error handling for loading bad png data
         self.assertRaisesRegex(ValueError, '[EBADPNG]', load_png_data, b'dsfsdfsfsfd')
 
+    def test_gr_operations_with_numbers(self):
+        s = self.create_screen()
+        g = s.grman
+
+        def li(payload, **kw):
+            cmd = ','.join('%s=%s' % (k, v) for k, v in kw.items())
+            res = send_command(s, cmd, payload)
+            return parse_response_with_ids(res)
+
+        code, ids = li('abc', s=1, v=1, f=24, I=1, i=3)
+        self.ae(code, 'EINVAL')
+
+        code, ids = li('abc', s=1, v=1, f=24, I=1)
+        self.ae((code, ids), ('OK', 'i=1,I=1'))
+        img = g.image_for_client_number(1)
+        self.ae(img['client_number'], 1)
+        self.ae(img['client_id'], 1)
+        code, ids = li('abc', s=1, v=1, f=24, I=1)
+        self.ae((code, ids), ('OK', 'i=2,I=1'))
+        img = g.image_for_client_number(1)
+        self.ae(img['client_number'], 1)
+        self.ae(img['client_id'], 2)
+        code, ids = li('abc', s=1, v=1, f=24, I=1)
+        self.ae((code, ids), ('OK', 'i=3,I=1'))
+        code, ids = li('abc', s=1, v=1, f=24, i=5)
+        self.ae((code, ids), ('OK', 'i=5'))
+        code, ids = li('abc', s=1, v=1, f=24, I=3)
+        self.ae((code, ids), ('OK', 'i=4,I=3'))
+
+        # Test chunked load with number
+        self.assertIsNone(li('abcd', s=2, v=2, m=1, I=93))
+        self.assertIsNone(li('efgh', m=1))
+        self.assertIsNone(li('ijkx', m=1))
+        self.ae(li('mnop', m=0), ('OK', 'i=6,I=93'))
+        img = g.image_for_client_number(93)
+        self.ae(img['data'], b'abcdefghijkxmnop')
+        self.ae(img['client_id'], 6)
+
+        # test put with number
+        def put(**kw):
+            cmd = ','.join('%s=%s' % (k, v) for k, v in kw.items())
+            cmd = 'a=p,' + cmd
+            return parse_response_with_ids(send_command(s, cmd))
+
+        code, idstr = put(c=2, r=2, I=93)
+        self.ae((code, idstr), ('OK', 'i=6,I=93'))
+        code, idstr = put(c=2, r=2, I=94)
+        self.ae(code, 'ENOENT')
+
+        # test delete with number
+        def delete(ac='N', **kw):
+            cmd = 'a=d'
+            if ac:
+                cmd += ',d={}'.format(ac)
+            if kw:
+                cmd += ',' + ','.join('{}={}'.format(k, v) for k, v in kw.items())
+            send_command(s, cmd)
+
+        count = s.grman.image_count
+        put(i=1), put(i=2), put(i=3), put(i=4), put(i=5)
+        delete(I=94)
+        self.ae(s.grman.image_count, count)
+        delete(I=93)
+        self.ae(s.grman.image_count, count - 1)
+        delete(I=1)
+        self.ae(s.grman.image_count, count - 2)
+
     def test_image_put(self):
         cw, ch = 10, 20
         s, dx, dy, put_image, put_ref, layers, rect_eq = put_helpers(self, cw, ch)
@@ -222,7 +304,8 @@ class TestGraphics(BaseTest):
         rect_eq(l0[0]['dest_rect'], -1, 1, -1 + dx, 1 - dy)
         self.ae(l0[0]['group_count'], 1)
         self.ae(s.cursor.x, 1), self.ae(s.cursor.y, 0)
-        put_ref(s, num_cols=s.columns, x_off=2, y_off=1, width=3, height=5, cell_x_off=3, cell_y_off=1, z=-1)
+        iid, (code, idstr) = put_ref(s, num_cols=s.columns, x_off=2, y_off=1, width=3, height=5, cell_x_off=3, cell_y_off=1, z=-1, placement_id=17)
+        self.ae(idstr, f'i={iid},p=17')
         l2 = layers(s)
         self.ae(len(l2), 2)
         rect_eq(l2[0]['src_rect'], 2 / 10, 1 / 20, (2 + 3) / 10, (1 + 5)/20)
@@ -316,7 +399,12 @@ class TestGraphics(BaseTest):
         delete('A')
         self.ae(s.grman.image_count, 0)
         iid = put_image(s, cw, ch)[0]
+        delete('I', i=iid, p=7)
+        self.ae(s.grman.image_count, 1)
         delete('I', i=iid)
+        self.ae(s.grman.image_count, 0)
+        iid = put_image(s, cw, ch, placement_id=9)[0]
+        delete('I', i=iid, p=9)
         self.ae(s.grman.image_count, 0)
         s.reset()
         put_image(s, cw, ch)
@@ -330,4 +418,15 @@ class TestGraphics(BaseTest):
         self.ae(s.grman.image_count, 0)
         put_image(s, cw, ch, z=9)
         delete('Z', z=9)
+        self.ae(s.grman.image_count, 0)
+
+        # test put + delete + put
+        iid = 999999
+        self.ae(put_image(s, cw, ch, id=iid), (iid, 'OK'))
+        self.ae(put_ref(s, id=iid), (iid, ('OK', f'i={iid}')))
+        delete('i', i=iid)
+        self.ae(s.grman.image_count, 1)
+        self.ae(put_ref(s, id=iid), (iid, ('OK', f'i={iid}')))
+        delete('I', i=iid)
+        self.ae(put_ref(s, id=iid), (iid, ('ENOENT', f'i={iid}')))
         self.ae(s.grman.image_count, 0)

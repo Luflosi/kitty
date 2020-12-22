@@ -325,6 +325,9 @@ Note that this code is indexed by PostScript name, and not the font
 family. This allows you to define very precise feature settings; e.g. you can
 disable a feature in the italic font but not in the regular font.
 
+On Linux, these are read from the FontConfig database first and then this,
+setting is applied, so they can be configured in a single, central place.
+
 To get the PostScript name for a font, use :code:`kitty + list-fonts --psnames`:
 
 .. code-block:: sh
@@ -519,6 +522,11 @@ def url_prefixes(x: str) -> Tuple[str, ...]:
 
 o('url_prefixes', 'http https file ftp', option_type=url_prefixes, long_text=_('''
 The set of URL prefixes to look for when detecting a URL under the mouse cursor.'''))
+
+o('detect_urls', True, long_text=_('''
+Detect URLs under the mouse. Detected URLs are highlighted
+with an underline and the mouse cursor becomes a hand over them.
+Even if this option is disabled, URLs are still clickable.'''))
 
 
 def copy_on_select(raw: str) -> str:
@@ -862,6 +870,8 @@ o('tab_bar_style', 'fade', option_type=choices('fade', 'separator', 'powerline',
 The tab bar style, can be one of: :code:`fade`, :code:`separator`, :code:`powerline`, or :code:`hidden`.
 In the fade style, each tab's edges fade into the background color, in the separator style, tabs are
 separated by a configurable separator, and the powerline shows the tabs as a continuous line.
+If you use the hidden style, you might want to create a mapping for the :code:`select_tab` action which
+presents you with a list of tabs and allows for easy switching to a tab.
 '''))
 
 
@@ -873,11 +883,12 @@ o('tab_bar_min_tabs', 2, option_type=tab_bar_min_tabs, long_text=_('''
 The minimum number of tabs that must exist before the tab bar is shown
 '''))
 
-o('tab_switch_strategy', 'previous', option_type=choices('previous', 'left', 'last'), long_text=_('''
+o('tab_switch_strategy', 'previous', option_type=choices('previous', 'left', 'right', 'last'), long_text=_('''
 The algorithm to use when switching to a tab when the current tab is closed.
 The default of :code:`previous` will switch to the last used tab. A value of
 :code:`left` will switch to the tab to the left of the closed tab. A value
-of :code:`last` will switch to the right-most tab.
+of :code:`right` will switch to the tab to the right of the closed tab.
+A value of :code:`last` will switch to the right-most tab.
 '''))
 
 
@@ -932,6 +943,10 @@ layout name and :code:`{num_windows}` for the number of windows
 in the tab. Note that formatting is done by Python's string formatting
 machinery, so you can use, for instance, :code:`{layout_name[:2].upper()}` to
 show only the first two letters of the layout name, upper-cased.
+If you want to style the text, you can use styling directives, for example:
+:code:`{fmt.fg.red}red{fmt.fg.default}normal{fmt.bg._00FF00}green bg{fmt.bg.normal}`.
+Similarly, for bold and italic:
+:code:`{fmt.bold}bold{fmt.nobold}normal{fmt.italic}italic{fmt.noitalic}`.
 '''))
 o('active_tab_title_template', 'none', option_type=active_tab_title_template, long_text=_('''
 Template to use for active tabs, if not specified falls back

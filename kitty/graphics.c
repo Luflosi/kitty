@@ -92,6 +92,16 @@ img_by_client_id(GraphicsManager *self, uint32_t id) {
     return NULL;
 }
 
+static inline Image*
+img_by_client_number(GraphicsManager *self, uint32_t number) {
+    // get the newest image with the specified number
+    for (size_t i = self->image_count; i-- > 0; ) {
+        if (self->images[i].client_number == number) return self->images + i;
+    }
+    return NULL;
+}
+
+
 static inline void
 remove_image(GraphicsManager *self, size_t idx) {
     free_image(self, self->images + idx);
@@ -137,22 +147,20 @@ apply_storage_quota(GraphicsManager *self, size_t storage_limit, id_type current
     if (!self->image_count) self->used_storage = 0;  // sanity check
 }
 
-static char add_response[512] = {0};
-static bool has_add_respose = false;
+static char command_response[512] = {0};
 
 static inline void
-set_add_response(const char *code, const char *fmt, ...) {
+set_command_failed_response(const char *code, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    size_t sz = sizeof(add_response)/sizeof(add_response[0]);
-    int num = snprintf(add_response, sz, "%s:", code);
-    vsnprintf(add_response + num, sz - num, fmt, args);
+    const size_t sz = sizeof(command_response)/sizeof(command_response[0]);
+    const int num = snprintf(command_response, sz, "%s:", code);
+    vsnprintf(command_response + num, sz - num, fmt, args);
     va_end(args);
-    has_add_respose = true;
 }
 
 // Decode formats {{{
-#define ABRT(code, ...) { set_add_response(#code, __VA_ARGS__); goto err; }
+#define ABRT(code, ...) { set_command_failed_response(#code, __VA_ARGS__); goto err; }
 
 static inline bool
 mmap_img_file(GraphicsManager UNUSED *self, Image *img, int fd, size_t sz, off_t offset) {
@@ -220,7 +228,7 @@ err:
 
 static void
 png_error_handler(const char *code, const char *msg) {
-    set_add_response(code, "%s", msg);
+    set_command_failed_response(code, "%s", msg);
 }
 
 static inline bool
@@ -308,12 +316,38 @@ find_or_create_image(GraphicsManager *self, uint32_t id, bool *existing) {
     return ans;
 }
 
+static int
+cmp_client_ids(const void* a, const void* b) {
+    const uint32_t *x = a, *y = b;
+    return *x - *y;
+}
+
+static inline uint32_t
+get_free_client_id(const GraphicsManager *self) {
+    if (!self->image_count) return 1;
+    uint32_t *client_ids = malloc(sizeof(uint32_t) * self->image_count);
+    size_t count = 0;
+    for (size_t i = 0; i < self->image_count; i++) {
+        Image *q = self->images + i;
+        if (q->client_id) client_ids[count++] = q->client_id;
+    }
+    if (!count) { free(client_ids); return 1; }
+    qsort(client_ids, count, sizeof(uint32_t), cmp_client_ids);
+    uint32_t prev_id = 0, ans = 1;
+    for (size_t i = 0; i < count; i++) {
+        if (client_ids[i] == prev_id) continue;
+        prev_id = client_ids[i];
+        if (client_ids[i] != ans) break;
+        ans = client_ids[i] + 1;
+    }
+    free(client_ids);
+    return ans;
+}
 
 static Image*
 handle_add_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_t *payload, bool *is_dirty, uint32_t iid) {
-#define ABRT(code, ...) { set_add_response(#code, __VA_ARGS__); self->loading_image = 0; if (img) img->data_loaded = false; return NULL; }
+#define ABRT(code, ...) { set_command_failed_response(#code, __VA_ARGS__); self->loading_image = 0; if (img) img->data_loaded = false; return NULL; }
 #define MAX_DATA_SZ (4u * 100000000u)
-    has_add_respose = false;
     bool existing, init_img = true;
     Image *img = NULL;
     unsigned char tt = g->transmission_type ? g->transmission_type : 'd';
@@ -336,6 +370,11 @@ handle_add_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_
         } else {
             img->internal_id = internal_id_counter++;
             img->client_id = iid;
+            img->client_number = g->image_number;
+            if (!img->client_id && img->client_number) {
+                img->client_id = get_free_client_id(self);
+                self->last_init_graphics_command.id = img->client_id;
+            }
         }
         img->atime = monotonic(); img->used_storage = 0;
         img->width = g->data_width; img->height = g->data_height;
@@ -402,7 +441,7 @@ handle_add_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_
             snprintf(fname, sizeof(fname)/sizeof(fname[0]), "%.*s", (int)g->payload_sz, payload);
             if (tt == 's') fd = shm_open(fname, O_RDONLY, 0);
             else fd = open(fname, O_CLOEXEC | O_RDONLY);
-            if (fd == -1) ABRT(EBADF, "Failed to open file %s for graphics transmission with error: [%d] %s", fname, errno, strerror(errno));
+            if (fd == -1) ABRT(EBADF, "Failed to open file for graphics transmission with error: [%d] %s", errno, strerror(errno));
             img->data_loaded = mmap_img_file(self, img, fd, g->data_sz, g->data_offset);
             safe_close(fd, __FILE__, __LINE__);
             break;
@@ -470,15 +509,26 @@ handle_add_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_
 }
 
 static inline const char*
-create_add_response(GraphicsManager UNUSED *self, bool data_loaded, uint32_t iid) {
-    static char rbuf[sizeof(add_response)/sizeof(add_response[0]) + 64];
-    if (iid) {
-        if (!has_add_respose) {
+finish_command_response(const GraphicsCommand *g, bool data_loaded, uint32_t iid, uint32_t placement_id, uint32_t image_number) {
+    static char rbuf[sizeof(command_response)/sizeof(command_response[0]) + 128];
+    bool is_ok_response = !command_response[0];
+    if (g->quiet) {
+        if (is_ok_response || g->quiet > 1) return NULL;
+    }
+    if (iid || image_number) {
+        if (is_ok_response) {
             if (!data_loaded) return NULL;
-            snprintf(add_response, 10, "OK");
+            snprintf(command_response, 10, "OK");
         }
-        snprintf(rbuf, sizeof(rbuf)/sizeof(rbuf[0]) - 1, "Gi=%u;%s", iid, add_response);
+        size_t pos = 0;
+        rbuf[pos++] = 'G';
+#define print(fmt, ...) pos += snprintf(rbuf + pos, arraysz(rbuf) - 1 - pos, fmt, __VA_ARGS__)
+        if (iid) print("i=%u", iid);
+        if (image_number) print(",I=%u", image_number);
+        if (placement_id) print(",p=%u", placement_id);
+        print(";%s", command_response);
         return rbuf;
+#undef print
     }
     return NULL;
 }
@@ -514,20 +564,24 @@ update_dest_rect(ImageRef *ref, uint32_t num_cols, uint32_t num_rows, CellPixelS
 }
 
 
-static void
+static uint32_t
 handle_put_command(GraphicsManager *self, const GraphicsCommand *g, Cursor *c, bool *is_dirty, Image *img, CellPixelSize cell) {
-    has_add_respose = false;
-    if (img == NULL) img = img_by_client_id(self, g->id);
-    if (img == NULL) { set_add_response("ENOENT", "Put command refers to non-existent image with id: %u", g->id); return; }
-    if (!img->data_loaded) { set_add_response("ENOENT", "Put command refers to image with id: %u that could not load its data", g->id); return; }
+    if (img == NULL) {
+        if (g->id) img = img_by_client_id(self, g->id);
+        else if (g->image_number) img = img_by_client_number(self, g->image_number);
+        if (img == NULL) { set_command_failed_response("ENOENT", "Put command refers to non-existent image with id: %u and number: %u", g->id, g->image_number); return g->id; }
+    }
+    if (!img->data_loaded) { set_command_failed_response("ENOENT", "Put command refers to image with id: %u that could not load its data", g->id); return img->client_id; }
     ensure_space_for(img, refs, ImageRef, img->refcnt + 1, refcap, 16, true);
     *is_dirty = true;
     self->layers_dirty = true;
     ImageRef *ref = NULL;
-    for (size_t i=0; i < img->refcnt; i++) {
-        if ((unsigned)img->refs[i].start_row == c->x && (unsigned)img->refs[i].start_column == c->y) {
-            ref = img->refs + i;
-            break;
+    if (g->placement_id && img->client_id) {
+        for (size_t i=0; i < img->refcnt; i++) {
+            if (img->refs[i].client_id == g->placement_id) {
+                ref = img->refs + i;
+                break;
+            }
         }
     }
     if (ref == NULL) {
@@ -543,10 +597,12 @@ handle_put_command(GraphicsManager *self, const GraphicsCommand *g, Cursor *c, b
     ref->cell_x_offset = MIN(g->cell_x_offset, cell.width - 1);
     ref->cell_y_offset = MIN(g->cell_y_offset, cell.height - 1);
     ref->num_cols = g->num_cells; ref->num_rows = g->num_lines;
+    if (img->client_id) ref->client_id = g->placement_id;
     update_src_rect(ref, img);
     update_dest_rect(ref, g->num_cells, g->num_lines, cell);
     // Move the cursor, the screen will take care of ensuring it is in bounds
     c->x += ref->effective_num_cols; c->y += ref->effective_num_rows - 1;
+    return img->client_id;
 }
 
 static int
@@ -640,7 +696,8 @@ grman_update_layers(GraphicsManager *self, unsigned int scrolled_by, float scree
 // Image lifetime/scrolling {{{
 
 static inline void
-filter_refs(GraphicsManager *self, const void* data, bool free_images, bool (*filter_func)(const ImageRef*, Image*, const void*, CellPixelSize), CellPixelSize cell) {
+filter_refs(GraphicsManager *self, const void* data, bool free_images, bool (*filter_func)(const ImageRef*, Image*, const void*, CellPixelSize), CellPixelSize cell, bool only_first_image) {
+    bool matched = false;
     for (size_t i = self->image_count; i-- > 0;) {
         Image *img = self->images + i;
         for (size_t j = img->refcnt; j-- > 0;) {
@@ -648,11 +705,14 @@ filter_refs(GraphicsManager *self, const void* data, bool free_images, bool (*fi
             if (filter_func(ref, img, data, cell)) {
                 remove_i_from_array(img->refs, j, img->refcnt);
                 self->layers_dirty = true;
+                matched = true;
             }
         }
         if (img->refcnt == 0 && (free_images || img->client_id == 0)) remove_image(self, i);
+        if (only_first_image && matched) break;
     }
 }
+
 
 static inline void
 modify_refs(GraphicsManager *self, const void* data, bool free_images, bool (*filter_func)(ImageRef*, Image*, const void*, CellPixelSize), CellPixelSize cell) {
@@ -734,14 +794,23 @@ clear_all_filter_func(const ImageRef *ref UNUSED, Image UNUSED *img, const void 
 
 void
 grman_clear(GraphicsManager *self, bool all, CellPixelSize cell) {
-    filter_refs(self, NULL, true, all ? clear_all_filter_func : clear_filter_func, cell);
+    filter_refs(self, NULL, true, all ? clear_all_filter_func : clear_filter_func, cell, false);
 }
 
 static inline bool
-id_filter_func(const ImageRef UNUSED *ref, Image *img, const void *data, CellPixelSize cell UNUSED) {
-    uint32_t iid = *(uint32_t*)data;
-    return img->client_id == iid;
+id_filter_func(const ImageRef *ref, Image *img, const void *data, CellPixelSize cell UNUSED) {
+    const GraphicsCommand *g = data;
+    if (g->id && img->client_id == g->id) return !g->placement_id || ref->client_id == g->placement_id;
+    return false;
 }
+
+static inline bool
+number_filter_func(const ImageRef *ref, Image *img, const void *data, CellPixelSize cell UNUSED) {
+    const GraphicsCommand *g = data;
+    if (g->image_number && img->client_number == g->image_number) return !g->placement_id || ref->client_id == g->placement_id;
+    return false;
+}
+
 
 static inline bool
 x_filter_func(const ImageRef *ref, Image UNUSED *img, const void *data, CellPixelSize cell UNUSED) {
@@ -775,14 +844,15 @@ point3d_filter_func(const ImageRef *ref, Image *img, const void *data, CellPixel
 
 static void
 handle_delete_command(GraphicsManager *self, const GraphicsCommand *g, Cursor *c, bool *is_dirty, CellPixelSize cell) {
-    static GraphicsCommand d;
+    GraphicsCommand d;
+    bool only_first_image = false;
     switch (g->delete_action) {
-#define I(u, data, func) filter_refs(self, data, g->delete_action == u, func, cell); *is_dirty = true; break
+#define I(u, data, func) filter_refs(self, data, g->delete_action == u, func, cell, only_first_image); *is_dirty = true; break
 #define D(l, u, data, func) case l: case u: I(u, data, func)
 #define G(l, u, func) D(l, u, g, func)
         case 0:
         D('a', 'A', NULL, clear_filter_func);
-        D('i', 'I', &g->id, id_filter_func);
+        G('i', 'I', id_filter_func);
         G('p', 'P', point_filter_func);
         G('q', 'Q', point3d_filter_func);
         G('x', 'X', x_filter_func);
@@ -792,6 +862,10 @@ handle_delete_command(GraphicsManager *self, const GraphicsCommand *g, Cursor *c
         case 'C':
             d.x_offset = c->x + 1; d.y_offset = c->y + 1;
             I('C', &d, point_filter_func);
+        case 'n':
+        case 'N':
+            only_first_image = true;
+            I('N', g, number_filter_func);
         default:
             REPORT_ERROR("Unknown graphics command delete action: %c", g->delete_action);
             break;
@@ -827,6 +901,12 @@ grman_rescale(GraphicsManager *self, CellPixelSize cell) {
 const char*
 grman_handle_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_t *payload, Cursor *c, bool *is_dirty, CellPixelSize cell) {
     const char *ret = NULL;
+    command_response[0] = 0;
+
+    if (g->id && g->image_number) {
+        set_command_failed_response("EINVAL", "Must not specify both image id and image number");
+        return finish_command_response(g, false, g->id, g->placement_id, g->image_number);
+    }
 
     switch(g->action) {
         case 0:
@@ -834,9 +914,11 @@ grman_handle_command(GraphicsManager *self, const GraphicsCommand *g, const uint
         case 'T':
         case 'q': {
             uint32_t iid = g->id, q_iid = iid;
-            if (g->action == 'q') { iid = 0; if (!q_iid) { REPORT_ERROR("Query graphics command without image id"); break; } }
+            bool is_query = g->action == 'q';
+            if (is_query) { iid = 0; if (!q_iid) { REPORT_ERROR("Query graphics command without image id"); break; } }
             Image *image = handle_add_command(self, g, payload, is_dirty, iid);
-            ret = create_add_response(self, image != NULL, g->action == 'q' ? q_iid: self->last_init_graphics_command.id);
+            if (is_query) ret = finish_command_response(g, image != NULL,  q_iid, 0, 0);
+            else ret = finish_command_response(g, image != NULL, self->last_init_graphics_command.id, self->last_init_graphics_command.placement_id, self->last_init_graphics_command.image_number);
             if (self->last_init_graphics_command.action == 'T' && image && image->data_loaded) handle_put_command(self, &self->last_init_graphics_command, c, is_dirty, image, cell);
             id_type added_image_id = image ? image->internal_id : 0;
             if (g->action == 'q') remove_images(self, add_trim_predicate, 0);
@@ -844,12 +926,12 @@ grman_handle_command(GraphicsManager *self, const GraphicsCommand *g, const uint
             break;
         }
         case 'p':
-            if (!g->id) {
-                REPORT_ERROR("Put graphics command without image id");
+            if (!g->id && !g->image_number) {
+                REPORT_ERROR("Put graphics command without image id or number");
                 break;
             }
-            handle_put_command(self, g, c, is_dirty, NULL, cell);
-            ret = create_add_response(self, true, g->id);
+            uint32_t image_id = handle_put_command(self, g, c, is_dirty, NULL, cell);
+            ret = finish_command_response(g, true, image_id, g->placement_id, g->image_number);
             break;
         case 'd':
             handle_delete_command(self, g, c, is_dirty, cell);
@@ -873,8 +955,8 @@ new(PyTypeObject UNUSED *type, PyObject UNUSED *args, PyObject UNUSED *kwds) {
 static inline PyObject*
 image_as_dict(Image *img) {
 #define U(x) #x, img->x
-    return Py_BuildValue("{sI sI sI sI sK sI sO sO sN}",
-        U(texture_id), U(client_id), U(width), U(height), U(internal_id), U(refcnt),
+    return Py_BuildValue("{sI sI sI sI sK sI sI sO sO sN}",
+        U(texture_id), U(client_id), U(width), U(height), U(internal_id), U(refcnt), U(client_number),
         "data_loaded", img->data_loaded ? Py_True : Py_False,
         "is_4byte_aligned", img->load_data.is_4byte_aligned ? Py_True : Py_False,
         "data", Py_BuildValue("y#", img->load_data.data, img->load_data.data_sz)
@@ -891,6 +973,13 @@ W(image_for_client_id) {
     bool existing = false;
     Image *img = find_or_create_image(self, id, &existing);
     if (!existing) { Py_RETURN_NONE; }
+    return image_as_dict(img);
+}
+
+W(image_for_client_number) {
+    unsigned long num = PyLong_AsUnsignedLong(args);
+    Image *img = img_by_client_number(self, num);
+    if (!img) Py_RETURN_NONE;
     return image_as_dict(img);
 }
 
@@ -944,6 +1033,7 @@ W(update_layers) {
 
 static PyMethodDef methods[] = {
     M(image_for_client_id, METH_O),
+    M(image_for_client_number, METH_O),
     M(update_layers, METH_VARARGS),
     {NULL}  /* Sentinel */
 };

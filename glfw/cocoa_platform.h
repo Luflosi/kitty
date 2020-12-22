@@ -133,6 +133,9 @@ typedef struct _GLFWwindowNS
 
     bool            maximized;
     bool            retina;
+    bool            in_traditional_fullscreen;
+    bool            titlebar_hidden;
+    unsigned long   pre_full_screen_style_mask;
 
     // Cached window properties to filter out duplicate events
     int             width, height;

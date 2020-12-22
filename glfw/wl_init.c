@@ -445,19 +445,17 @@ static void keyboardHandleKey(void* data UNUSED,
 
     _glfw.wl.serial = serial;
     glfw_xkb_handle_key_event(window, &_glfw.wl.xkb, key, action);
-    bool repeatable = false;
-    _glfw.wl.keyRepeatInfo.key = 0;
 
     if (action == GLFW_PRESS && _glfw.wl.keyboardRepeatRate > 0 && glfw_xkb_should_repeat(&_glfw.wl.xkb, key))
     {
         _glfw.wl.keyRepeatInfo.key = key;
-        repeatable = true;
         _glfw.wl.keyRepeatInfo.keyboardFocus = window;
-    }
-    if (repeatable) {
         changeTimerInterval(&_glfw.wl.eventLoopData, _glfw.wl.keyRepeatInfo.keyRepeatTimer, _glfw.wl.keyboardRepeatDelay);
+        toggleTimer(&_glfw.wl.eventLoopData, _glfw.wl.keyRepeatInfo.keyRepeatTimer, 1);
+    } else if (action == GLFW_RELEASE && key == _glfw.wl.keyRepeatInfo.key) {
+        _glfw.wl.keyRepeatInfo.key = 0;
+        toggleTimer(&_glfw.wl.eventLoopData, _glfw.wl.keyRepeatInfo.keyRepeatTimer, 0);
     }
-    toggleTimer(&_glfw.wl.eventLoopData, _glfw.wl.keyRepeatInfo.keyRepeatTimer, repeatable ? 1 : 0);
 }
 
 static void keyboardHandleModifiers(void* data UNUSED,

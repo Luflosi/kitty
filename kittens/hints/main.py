@@ -120,7 +120,7 @@ class Hints(Handler):
         self.all_marks = all_marks
         self.ignore_mark_indices: Set[int] = set()
         self.args = args
-        self.window_title = _('Choose URL') if args.type == 'url' else _('Choose text')
+        self.window_title = args.window_title or (_('Choose URL') if args.type == 'url' else _('Choose text'))
         self.multiple = args.multiple
         self.match_suffix = self.get_match_suffix(args)
         self.chosen: List[Mark] = []
@@ -519,7 +519,7 @@ The type of text to search for. A value of :code:`linenum` is special, it looks
 for error messages using the pattern specified with :option:`--regex`, which
 must have the named groups, :code:`path` and :code:`line`. If not specified,
 will look for :code:`path:line`. The :option:`--linenum-action` option
-controls what to do with the selected error message, other options are ignored.
+controls where to display the selected error message, other options are ignored.
 
 
 --regex
@@ -539,13 +539,13 @@ the form key=value.
 default=self
 type=choice
 choices=self,window,tab,os_window,background
+Where to perform the action on matched errors. :code:`self` means the current
+window, :code:`window` a new kitty window, :code:`tab` a new tab,
+:code:`os_window` a new OS window and :code:`background` run in the background.
 The action to perform on the matched errors. The actual action is whatever
-arguments are provided to the kitten, for example:
-:code:`kitty + kitten hints --type=linenum vim +{line} {path}`
-will open the matched path at the matched line number in vim. This option
-controls where the action is executed: :code:`self` means the current window,
-:code:`window` a new kitty window, :code:`tab` a new tab, :code:`os_window`
-a new OS window and :code:`background` run in the background.
+arguments are provided to the kitten, for example: :code:`kitty + kitten hints
+--type=linenum --linenum-action=tab vim +{line} {path}` will open the matched
+path at the matched line number in vim in a new kitty tab.
 
 
 --url-prefixes
@@ -634,6 +634,9 @@ on selected matches. See https://sw.kovidgoyal.net/kitty/kittens/hints.html
 for details. You can also specify absolute paths to load the script from elsewhere.
 
 
+--window-title
+The window title for the hints window, default title is selected based on
+the type of text being hinted.
 '''.format(
     default_regex=DEFAULT_REGEX,
     line='{{line}}', path='{{path}}'

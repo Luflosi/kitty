@@ -149,6 +149,8 @@ void
 screen_reset(Screen *self) {
     if (self->linebuf == self->alt_linebuf) screen_toggle_screen_buffer(self, true, true);
     if (self->overlay_line.is_active) deactivate_overlay_line(self);
+    self->main_savepoint.is_valid = false;
+    self->alt_savepoint.is_valid = false;
     linebuf_clear(self->linebuf, BLANK_CHAR);
     historybuf_clear(self->historybuf);
     clear_hyperlink_pool(self->hyperlink_pool);
@@ -999,8 +1001,8 @@ index_selection(const Screen *self, Selections *selections, bool up) {
     if (self->overlay_line.is_active) deactivate_overlay_line(self); \
     linebuf_index(self->linebuf, top, bottom); \
     INDEX_GRAPHICS(-1) \
-    if (self->linebuf == self->main_linebuf && bottom == self->lines - 1) { \
-        /* Only add to history when no page margins have been set */ \
+    if (self->linebuf == self->main_linebuf && self->margin_top == 0) { \
+        /* Only add to history when no top margin has been set */ \
         linebuf_init_line(self->linebuf, bottom); \
         historybuf_add_line(self->historybuf, self->linebuf->line, &self->as_ansi_buf); \
         self->history_line_added_count++; \
@@ -1096,14 +1098,13 @@ screen_linefeed(Screen *self) {
 
 void
 screen_save_cursor(Screen *self) {
-    SavepointBuffer *pts = self->linebuf == self->main_linebuf ? &self->main_savepoints : &self->alt_savepoints;
-    Savepoint *sp;
-    buffer_push(pts, sp);
+    Savepoint *sp = self->linebuf == self->main_linebuf ? &self->main_savepoint : &self->alt_savepoint;
     cursor_copy_to(self->cursor, &(sp->cursor));
     sp->mDECOM = self->modes.mDECOM;
     sp->mDECAWM = self->modes.mDECAWM;
     sp->mDECSCNM = self->modes.mDECSCNM;
     COPY_CHARSETS(self, sp);
+    sp->is_valid = true;
 }
 
 void
@@ -1115,10 +1116,8 @@ screen_save_modes(Screen *self) {
 
 void
 screen_restore_cursor(Screen *self) {
-    SavepointBuffer *pts = self->linebuf == self->main_linebuf ? &self->main_savepoints : &self->alt_savepoints;
-    Savepoint *sp;
-    buffer_pop(pts, sp);
-    if (sp == NULL) {
+    Savepoint *sp = self->linebuf == self->main_linebuf ? &self->main_savepoint : &self->alt_savepoint;
+    if (!sp->is_valid) {
         screen_cursor_position(self, 1, 1);
         screen_reset_mode(self, DECOM);
         RESET_CHARSETS;
@@ -2138,6 +2137,20 @@ draw(Screen *self, PyObject *src) {
     Py_RETURN_NONE;
 }
 
+extern void
+parse_sgr(Screen *screen, uint32_t *buf, unsigned int num, unsigned int *params, PyObject *dump_callback, const char *report_name, Region *region);
+
+static PyObject*
+apply_sgr(Screen *self, PyObject *src) {
+    if (!PyUnicode_Check(src)) { PyErr_SetString(PyExc_TypeError, "A unicode string is required"); return NULL; }
+    if (PyUnicode_READY(src) != 0) { return PyErr_NoMemory(); }
+    Py_UCS4 *buf = PyUnicode_AsUCS4Copy(src);
+    if (!buf) return NULL;
+    unsigned int params[MAX_PARAMS] = {0};
+    parse_sgr(self, buf, PyUnicode_GET_LENGTH(src), params, NULL, "parse_sgr", NULL);
+    Py_RETURN_NONE;
+}
+
 static PyObject*
 reset_mode(Screen *self, PyObject *args) {
     int private = false;
@@ -2784,6 +2797,7 @@ static PyMethodDef methods[] = {
     MND(visual_line, METH_VARARGS)
     MND(current_url_text, METH_NOARGS)
     MND(draw, METH_O)
+    MND(apply_sgr, METH_O)
     MND(cursor_position, METH_VARARGS)
     MND(set_mode, METH_VARARGS)
     MND(reset_mode, METH_VARARGS)

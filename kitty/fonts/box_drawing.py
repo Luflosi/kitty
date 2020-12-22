@@ -663,17 +663,32 @@ def smooth_mosaic(
                 buf[offset + x] = 255
 
 
+def eight_range(size: int, which: int) -> range:
+    thickness = max(1, size // 8)
+    block = thickness * 8
+    if block == size:
+        return range(thickness * which, thickness * (which + 1))
+    if block > size:
+        start = min(which * thickness, size - thickness)
+        return range(start, start + thickness)
+    extra = size - block
+    thicknesses = list(repeat(thickness, 8))
+    for i in (3, 4, 2, 5, 6, 1, 7, 0):  # ensures the thickness of first and last are least likely to be changed
+        if not extra:
+            break
+        extra -= 1
+        thicknesses[i] += 1
+    pos = sum(thicknesses[:which])
+    return range(pos, pos + thicknesses[which])
+
+
 def eight_bar(buf: BufType, width: int, height: int, level: int = 1, which: int = 0, horizontal: bool = False) -> None:
     if horizontal:
         x_range = range(0, width)
-        thickness = max(1, height // 8)
-        y_start = min(which * thickness, height - 2)
-        y_range = range(y_start, height if which == 7 else min(y_start + thickness, height))
+        y_range = eight_range(height, which)
     else:
         y_range = range(0, height)
-        thickness = max(1, width // 8)
-        x_start = min(which * thickness, width - 2)
-        x_range = range(x_start, width if which == 7 else min(x_start + thickness, width))
+        x_range = eight_range(width, which)
     for y in y_range:
         offset = y * width
         for x in x_range:
@@ -940,10 +955,9 @@ for i in range(256):
 
 c = 0x1fb00
 for i in range(1, 63):
-    if i in (20, 40):
-        continue
-    box_chars[chr(c)] = [p(sextant, which=i)]
-    c += 1
+    if i not in (21, 42):
+        box_chars[chr(c)] = [p(sextant, which=i)]
+        c += 1
 
 for i in range(1, 7):
     box_chars[chr(0x1fb6f + i)] = [p(eight_bar, which=i)]

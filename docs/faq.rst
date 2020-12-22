@@ -47,6 +47,10 @@ terminfo files to the server::
 
     kitty +kitten ssh myserver
 
+This ssh kitten takes all the same command line arguments
+as ssh, you can alias it to ssh in your shell's rc files to avoid having to
+type it each time.
+
 If for some reason that does not work (typically because the server is using a
 non POSIX compliant shell), you can use the following one-liner instead (it
 is slower as it needs to ssh into the server twice, but will work with most
@@ -182,7 +186,7 @@ following :file:`~/.config/fontconfig/fonts.conf`::
     <?xml version="1.0"?>
     <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
     <fontconfig>
-    <match target="font">
+    <match target="scan">
         <test name="family">
             <string>Your Font Family Name</string>
         </test>
@@ -235,6 +239,18 @@ available. The manual way to figure it out is:
        This shows the hex value, ``13`` in this case.
 
     3. Use ``\x(hexval)`` in your ``send_text`` command in kitty. So in this example, ``\x13``
+
+How do I open a new window or tab with the same working directory as the current window?
+--------------------------------------------------------------------------------------------
+
+In :file:`kitty.conf` add the following::
+
+    map f1 launch --cwd=current
+    map f2  launch --cwd=current --type=tab
+
+Pressing :kbd:`F1` will open a new kitty window with the same working directory
+as the current window. The :doc:`launch command <launch>` is very powerful,
+explore :doc:`its documentation <launch>`.
 
 
 I am using tmux and have a problem

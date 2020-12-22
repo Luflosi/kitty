@@ -411,6 +411,7 @@ class FontConfigPattern(TypedDict):
     postscript_name: str
     style: str
     spacing: str
+    fontfeatures: List[str]
     weight: int
     width: int
     slant: int
@@ -438,6 +439,12 @@ def fc_match(
     allow_bitmapped_fonts: bool = False,
     size_in_pts: float = 0.,
     dpi: float = 0.
+) -> FontConfigPattern:
+    pass
+
+
+def fc_match_postscript_name(
+    postscript_name: str
 ) -> FontConfigPattern:
     pass
 
@@ -1005,6 +1012,9 @@ class Screen:
         pass
 
     def draw(self, text: str) -> None:
+        pass
+
+    def apply_sgr(self, text: str) -> None:
         pass
 
     def copy_colors_from(self, other: 'Screen') -> None:

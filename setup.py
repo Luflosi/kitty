@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import platform
 import time
 from contextlib import suppress
 from functools import partial
@@ -47,6 +48,7 @@ version = tuple(
 _plat = sys.platform.lower()
 is_macos = 'darwin' in _plat
 is_openbsd = 'openbsd' in _plat
+is_arm = platform.processor() == 'arm'
 Env = glfw.Env
 env = Env()
 PKGCONFIG = os.environ.get('PKGCONFIG_EXE', 'pkg-config')
@@ -246,6 +248,10 @@ def init_env(
     extra_logging: Iterable[str] = ()
 ) -> Env:
     native_optimizations = native_optimizations and not sanitize and not debug
+    if native_optimizations and is_macos and is_arm:
+        # see https://github.com/kovidgoyal/kitty/issues/3126
+        # -march=native is not supported when targeting Apple Silicon
+        native_optimizations = False
     cc, ccver = cc_version()
     print('CC:', cc, ccver)
     stack_protector = first_successful_compile(cc, '-fstack-protector-strong', '-fstack-protector')
@@ -297,6 +303,9 @@ def init_env(
         # See https://github.com/google/sanitizers/issues/647
         cflags.append('-flto')
         ldflags.append('-flto')
+
+    if debug:
+        cflags.append('-DKITTY_DEBUG_BUILD')
 
     if profile:
         cppflags.append('-DWITH_PROFILER')

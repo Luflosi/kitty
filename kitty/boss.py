@@ -10,7 +10,8 @@ from contextlib import suppress
 from functools import partial
 from gettext import gettext as _
 from typing import (
-    Any, Callable, Dict, Generator, Iterable, List, Optional, Tuple, Union
+    Any, Callable, Dict, Generator, Iterable, List, Optional, Tuple, Union,
+    cast
 )
 from weakref import WeakValueDictionary
 
@@ -366,9 +367,17 @@ class Boss:
             c = command_for_name(cmd)
             opts, items = parse_subcommand_cli(c, items)
             payload = c.message_to_kitty(global_opts, opts, items)
-            c.response_from_kitty(self, self.active_window, PayloadGetter(c, payload if isinstance(payload, dict) else {}))
-        except (Exception, SystemExit) as e:
-            self.show_error(_('remote_control mapping failed'), str(e))
+            import types
+            if isinstance(cast(types.GeneratorType, payload), types.GeneratorType):
+                payloads = cast(types.GeneratorType, payload)
+                for x in payloads:
+                    c.response_from_kitty(self, self.active_window, PayloadGetter(c, x if isinstance(x, dict) else {}))
+            else:
+                c.response_from_kitty(self, self.active_window, PayloadGetter(c, payload if isinstance(payload, dict) else {}))
+        except (Exception, SystemExit):
+            import traceback
+            tb = traceback.format_exc()
+            self.show_error(_('remote_control mapping failed'), tb)
 
     def peer_message_received(self, msg_bytes: bytes) -> Optional[bytes]:
         cmd_prefix = b'\x1bP@kitty-cmd'
@@ -1462,15 +1471,45 @@ class Boss:
         self._cleanup_tab_after_window_removal(tab)
         target_tab.make_active()
 
+    def select_tab(self) -> None:
+        title = 'Choose a tab to switch to'
+        lines = [title, '']
+        fmt = ': {1}'
+        tab_id_map: Dict[int, Optional[Union[str, int]]] = {}
+        current_tab = self.active_tab
+        done_tab_id: Optional[Union[str, int]] = None
+
+        for i, tab in enumerate(self.all_tabs):
+            if tab is not current_tab:
+                tab_id_map[len(tab_id_map)] = tab.id
+                lines.append(fmt.format(i + 1, tab.title))
+
+        def done(data: Dict[str, Any], target_window_id: int, self: Boss) -> None:
+            nonlocal done_tab_id
+            done_tab_id = tab_id_map[int(data['groupdicts'][0]['index'])]
+
+        def done2(target_window_id: int, self: Boss) -> None:
+            tab_id = done_tab_id
+            if tab_id is not None:
+                for i, tab in enumerate(self.all_tabs):
+                    if tab.id == tab_id:
+                        self.set_active_tab(tab)
+                        break
+
+        self._run_kitten(
+            'hints', args=(
+                '--ascending', '--customize-processing=::import::kitty.choose_entry',
+                r'--regex=(?m)^:\s+.+$', '--window-title', title,
+            ), input_data='\r\n'.join(lines).encode('utf-8'), custom_callback=done, action_on_removal=done2
+        )
+
     def detach_window(self, *args: str) -> None:
         if not args or args[0] == 'new':
             return self._move_window_to(target_os_window_id='new')
         if args[0] == 'new-tab':
             return self._move_window_to(target_tab_id='new')
-        lines = [
-            'Choose a tab to move the window to',
-            ''
-        ]
+        title = 'Choose a tab to move the window to'
+        lines = [title, '']
         fmt = ': {1}'
         tab_id_map: Dict[int, Optional[Union[str, int]]] = {}
         current_tab = self.active_tab
@@ -1506,7 +1545,7 @@ class Boss:
         self._run_kitten(
             'hints', args=(
                 '--ascending', '--customize-processing=::import::kitty.choose_entry',
-                r'--regex=(?m)^:\s+.+$',
+                r'--regex=(?m)^:\s+.+$', '--window-title', title,
             ), input_data='\r\n'.join(lines).encode('utf-8'), custom_callback=done, action_on_removal=done2
         )
 
@@ -1514,10 +1553,8 @@ class Boss:
         if not args or args[0] == 'new':
             return self._move_tab_to()
 
-        lines = [
-            'Choose an OS window to move the tab to',
-            ''
-        ]
+        title = 'Choose an OS window to move the tab to'
+        lines = [title, '']
         fmt = ': {1}'
         os_window_id_map: Dict[int, Optional[int]] = {}
         current_os_window = getattr(self.active_tab, 'os_window_id', 0)
@@ -1554,7 +1591,7 @@ class Boss:
         self._run_kitten(
             'hints', args=(
                 '--ascending', '--customize-processing=::import::kitty.choose_entry',
-                r'--regex=(?m)^:\s+.+$',
+                r'--regex=(?m)^:\s+.+$', '--window-title', title,
             ), input_data='\r\n'.join(lines).encode('utf-8'), custom_callback=done, action_on_removal=done2
         )
 
