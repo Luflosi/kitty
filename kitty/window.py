@@ -19,27 +19,28 @@ from typing import (
 from .child import ProcessDesc
 from .cli_stub import CLIOptions
 from .config import build_ansi_color_table
-from .constants import ScreenGeometry, WindowGeometry, appname, wakeup
+from .constants import appname, wakeup, is_macos
 from .fast_data_types import (
     BGIMAGE_PROGRAM, BLIT_PROGRAM, CELL_BG_PROGRAM, CELL_FG_PROGRAM,
-    CELL_PROGRAM, CELL_SPECIAL_PROGRAM, DCS, DECORATION, DIM,
+    CELL_PROGRAM, CELL_SPECIAL_PROGRAM, DCS, DECORATION, DIM, GLFW_MOD_CONTROL,
     GRAPHICS_ALPHA_MASK_PROGRAM, GRAPHICS_PREMULT_PROGRAM, GRAPHICS_PROGRAM,
     MARK, MARK_MASK, OSC, REVERSE, SCROLL_FULL, SCROLL_LINE, SCROLL_PAGE,
-    STRIKETHROUGH, TINT_PROGRAM, Screen, add_timer, add_window,
-    cell_size_for_window, compile_program, get_boss, get_clipboard_string,
-    init_cell_program, pt_to_px, set_clipboard_string, set_titlebar_color,
-    set_window_padding, set_window_render_data, update_window_title,
-    update_window_visibility, viewport_for_window
+    STRIKETHROUGH, TINT_PROGRAM, KeyEvent, Screen, add_timer, add_window,
+    cell_size_for_window, compile_program, encode_key_for_tty, get_boss,
+    get_clipboard_string, init_cell_program, pt_to_px, set_clipboard_string,
+    set_titlebar_color, set_window_padding, set_window_render_data,
+    update_window_title, update_window_visibility, viewport_for_window
 )
-from .keys import defines, extended_key_event, keyboard_mode_name
+from .keys import keyboard_mode_name
 from .notify import NotificationCommand, handle_notification_cmd
 from .options_stub import Options
 from .rgb import to_color
 from .terminfo import get_capabilities
+from .types import ScreenGeometry, WindowGeometry
 from .typing import BossType, ChildType, EdgeLiteral, TabType, TypedDict
 from .utils import (
-    color_as_int, get_primary_selection, load_shaders, open_cmd, open_url,
-    parse_color_set, read_shell_environment, sanitize_title,
+    color_as_int, get_primary_selection, load_shaders, log_error, open_cmd,
+    open_url, parse_color_set, read_shell_environment, sanitize_title,
     set_primary_selection
 )
 
@@ -55,6 +56,9 @@ class WindowDict(TypedDict):
     cmdline: List[str]
     env: Dict[str, str]
     foreground_processes: List[ProcessDesc]
+    is_self: bool
+    lines: int
+    columns: int
 
 
 class PipeData(TypedDict):
@@ -379,7 +383,7 @@ class Window:
         return 'Window(title={}, id={})'.format(
                 self.title, self.id)
 
-    def as_dict(self, is_focused: bool = False) -> WindowDict:
+    def as_dict(self, is_focused: bool = False, is_self: bool = False) -> WindowDict:
         return dict(
             id=self.id,
             is_focused=is_focused,
@@ -388,7 +392,10 @@ class Window:
             cwd=self.child.current_cwd or self.child.cwd,
             cmdline=self.child.cmdline,
             env=self.child.environ,
-            foreground_processes=self.child.foreground_processes
+            foreground_processes=self.child.foreground_processes,
+            is_self=is_self,
+            lines=self.screen.lines,
+            columns=self.screen.columns,
         )
 
     def serialize_state(self) -> Dict[str, Any]:
@@ -424,7 +431,7 @@ class Window:
             return False
         assert not isinstance(pat, tuple)
 
-        if field == 'id':
+        if field in ('id', 'window_id'):
             return True if pat.pattern == str(self.id) else False
         if field == 'pid':
             return True if pat.pattern == str(self.child.pid) else False
@@ -500,7 +507,7 @@ class Window:
     def write_to_child(self, data: Union[str, bytes]) -> None:
         if data:
             if get_boss().child_monitor.needs_write(self.id, data) is not True:
-                print('Failed to write to child %d as it does not exist' % self.id, file=sys.stderr)
+                log_error(f'Failed to write to child {self.id} as it does not exist')
 
     def title_updated(self) -> None:
         update_window_title(self.os_window_id, self.tab_id, self.id, self.title)
@@ -622,13 +629,15 @@ class Window:
                 tab.on_bell(self)
 
     def change_titlebar_color(self) -> None:
-        val = self.opts.macos_titlebar_color
+        val = self.opts.macos_titlebar_color if is_macos else self.opts.wayland_titlebar_color
         if val:
             if (val & 0xff) == 1:
                 val = self.screen.color_profile.default_bg
             else:
                 val = val >> 8
             set_titlebar_color(self.os_window_id, val)
+        else:
+            set_titlebar_color(self.os_window_id, 0, True)
 
     def change_colors(self, changes: Dict[DynamicColor, Optional[str]]) -> None:
         dirtied = default_bg_changed = False
@@ -881,14 +890,20 @@ class Window:
         if text:
             set_clipboard_string(text)
 
+    def encoded_key(self, key_event: KeyEvent) -> bytes:
+        return encode_key_for_tty(
+            key=key_event.key, shifted_key=key_event.shifted_key, alternate_key=key_event.alternate_key,
+            mods=key_event.mods, action=key_event.action, text=key_event.text,
+            key_encoding_flags=self.screen.current_key_encoding_flags(),
+            cursor_key_mode=self.screen.cursor_key_mode,
+        ).encode('ascii')
+
     def copy_or_interrupt(self) -> None:
         text = self.text_for_selection()
         if text:
             set_clipboard_string(text)
         else:
-            mode = keyboard_mode_name(self.screen)
-            data = extended_key_event(defines.GLFW_KEY_C, defines.GLFW_MOD_CONTROL, defines.GLFW_PRESS) if mode == 'kitty' else b'\x03'
-            self.write_to_child(data)
+            self.write_to_child(self.encoded_key(KeyEvent(key=ord('c'), mods=GLFW_MOD_CONTROL)))
 
     def copy_and_clear_or_interrupt(self) -> None:
         self.copy_or_interrupt()

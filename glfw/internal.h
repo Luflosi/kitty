@@ -276,6 +276,7 @@ struct _GLFWinitconfig
     bool          hatButtons;
     int           angleType;
     bool          debugKeyboard;
+    bool          debugRendering;
     struct {
         bool      menubar;
         bool      chdir;
@@ -401,6 +402,11 @@ struct _GLFWcontext
     _GLFWcontextOSMesa osmesa;
 };
 
+typedef struct GLFWKeyState {
+    uint32_t key;
+    char action;
+} GLFWKeyState;
+
 // Window and context structure
 //
 struct _GLFWwindow
@@ -431,7 +437,7 @@ struct _GLFWwindow
     bool                lockKeyMods;
     int                 cursorMode;
     char                mouseButtons[GLFW_MOUSE_BUTTON_LAST + 1];
-    char                keys[GLFW_KEY_LAST + 1];
+    GLFWKeyState        activated_keys[16];
     // Virtual cursor position when cursor is disabled
     double              virtualCursorPosX, virtualCursorPosY;
     bool                rawMouseMotion;
@@ -609,6 +615,7 @@ struct _GLFWlibrary
         GLFWmonitorfun  monitor;
         GLFWjoystickfun joystick;
         GLFWapplicationclosefun application_close;
+        GLFWdrawtextfun draw_text;
     } callbacks;
 
 
@@ -649,7 +656,7 @@ void _glfwPlatformDestroyCursor(_GLFWcursor* cursor);
 void _glfwPlatformSetCursor(_GLFWwindow* window, _GLFWcursor* cursor);
 
 const char* _glfwPlatformGetNativeKeyName(int native_key);
-int _glfwPlatformGetNativeKeyForKey(int key);
+int _glfwPlatformGetNativeKeyForKey(uint32_t key);
 
 void _glfwPlatformFreeMonitor(_GLFWmonitor* monitor);
 void _glfwPlatformGetMonitorPos(_GLFWmonitor* monitor, int* xpos, int* ypos);
@@ -723,7 +730,8 @@ void _glfwPlatformSetWindowDecorated(_GLFWwindow* window, bool enabled);
 void _glfwPlatformSetWindowFloating(_GLFWwindow* window, bool enabled);
 void _glfwPlatformSetWindowMousePassthrough(_GLFWwindow* window, bool enabled);
 void _glfwPlatformSetWindowOpacity(_GLFWwindow* window, float opacity);
-void _glfwPlatformUpdateIMEState(_GLFWwindow *w, int which, int a, int b, int c, int d);
+void _glfwPlatformUpdateIMEState(_GLFWwindow *w, const GLFWIMEUpdateEvent *ev);
+void _glfwPlatformChangeCursorTheme(void);
 
 void _glfwPlatformPollEvents(void);
 void _glfwPlatformWaitEvents(void);
@@ -771,7 +779,6 @@ void _glfwInputWindowDamage(_GLFWwindow* window);
 void _glfwInputWindowCloseRequest(_GLFWwindow* window);
 void _glfwInputWindowMonitor(_GLFWwindow* window, _GLFWmonitor* monitor);
 
-void _glfwInitializeKeyEvent(GLFWkeyevent *ev, int key, int native_key, int action, int mods);
 void _glfwInputKeyboard(_GLFWwindow *window, GLFWkeyevent *ev);
 void _glfwInputScroll(_GLFWwindow* window, double xoffset, double yoffset, int flags, int mods);
 void _glfwInputMouseClick(_GLFWwindow* window, int button, int action, int mods);

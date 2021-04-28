@@ -6,14 +6,17 @@
  */
 
 #include "data-types.h"
+#include "cleanup.h"
 #include <dlfcn.h>
 
 #define FUNC(name, restype, ...) typedef restype (*name##_func)(__VA_ARGS__); static name##_func name = NULL
 #define LOAD_FUNC(handle, name) {\
     *(void **) (&name) = dlsym(handle, #name); \
-    const char* error = dlerror(); \
-    if (error != NULL) { \
-        PyErr_Format(PyExc_OSError, "Failed to load the function %s with error: %s", #name, error); dlclose(handle); handle = NULL; return NULL; \
+    if (!name) { \
+        const char* error = dlerror(); \
+        if (error != NULL) { \
+            PyErr_Format(PyExc_OSError, "Failed to load the function %s with error: %s", #name, error); dlclose(handle); handle = NULL; return NULL; \
+        } \
     } \
 }
 
@@ -139,6 +142,7 @@ load_libcanberra(void) {
     if (PyErr_Occurred()) {
         PyErr_Print();
         dlclose(libcanberra_handle); libcanberra_handle = NULL;
+        return;
     }
     if (ca_context_create(&canberra_ctx) != 0) {
         fprintf(stderr, "Failed to create libcanberra context, cannot play beep sound\n");
@@ -171,9 +175,6 @@ finalize(void) {
 bool
 init_desktop(PyObject *m) {
     if (PyModule_AddFunctions(m, module_methods) != 0) return false;
-    if (Py_AtExit(finalize) != 0) {
-        PyErr_SetString(PyExc_RuntimeError, "Failed to register the desktop.c at exit handler");
-        return false;
-    }
+    register_at_exit_cleanup_func(DESKTOP_CLEANUP_FUNC, finalize);
     return true;
 }

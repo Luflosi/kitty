@@ -396,6 +396,13 @@ delete_lines(LineBuf *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+void
+linebuf_copy_line_to(LineBuf *self, Line *line, index_type where) {
+    init_line(self, self->line, self->line_map[where]);
+    copy_line(line, self->line);
+    self->line_attrs[where] = TEXT_DIRTY_MASK | (line->continued ? CONTINUED_MASK : 0);
+}
+
 static PyObject*
 as_ansi(LineBuf *self, PyObject *callback) {
 #define as_ansi_doc "as_ansi(callback) -> The contents of this buffer as ANSI escaped text. callback is called with each successive line."
@@ -454,7 +461,7 @@ __str__(LineBuf *self) {
     if (lines == NULL) return PyErr_NoMemory();
     for (index_type i = 0; i < self->ynum; i++) {
         init_line(self, self->line, self->line_map[i]);
-        PyObject *t = line_as_unicode(self->line);
+        PyObject *t = line_as_unicode(self->line, false);
         if (t == NULL) { Py_CLEAR(lines); return NULL; }
         PyTuple_SET_ITEM(lines, i, t);
     }

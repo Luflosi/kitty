@@ -20,7 +20,8 @@ SAVE_CURSOR = '\0337'
 RESTORE_CURSOR = '\0338'
 SAVE_PRIVATE_MODE_VALUES = '\033[?s'
 RESTORE_PRIVATE_MODE_VALUES = '\033[?r'
-
+SAVE_COLORS = '\033[#P'
+RESTORE_COLORS = '\033[#Q'
 MODES = dict(
     LNM=(20, ''),
     IRM=(4, ''),
@@ -39,7 +40,6 @@ MODES = dict(
     MOUSE_URXVT_MODE=(1015, '?'),
     ALTERNATE_SCREEN=(1049, '?'),
     BRACKETED_PASTE=(2004, '?'),
-    EXTENDED_KEYBOARD=(2017, '?'),
 )
 
 F = TypeVar('F')
@@ -269,23 +269,24 @@ def init_state(alternate_screen: bool = True) -> str:
         reset_mode('MOUSE_MOTION_TRACKING') + reset_mode('MOUSE_MOVE_TRACKING') +
         reset_mode('FOCUS_TRACKING') + reset_mode('MOUSE_UTF8_MODE') +
         reset_mode('MOUSE_SGR_MODE') + reset_mode('MOUSE_UTF8_MODE') +
-        set_mode('BRACKETED_PASTE') + set_mode('EXTENDED_KEYBOARD') +
-        '\033]30001\033\\' +
+        set_mode('BRACKETED_PASTE') + SAVE_COLORS +
         '\033[*x'  # reset DECSACE to default region select
     )
     if alternate_screen:
         ans += set_mode('ALTERNATE_SCREEN') + reset_mode('DECOM')
         ans += clear_screen()
+    ans += '\033[>31u'  # extended keyboard mode
     return ans
 
 
 def reset_state(normal_screen: bool = True) -> str:
     ans = ''
+    ans += '\033[<u'  # restore keyboard mode
     if normal_screen:
         ans += reset_mode('ALTERNATE_SCREEN')
     ans += RESTORE_PRIVATE_MODE_VALUES
     ans += RESTORE_CURSOR
-    ans += '\033]30101\033\\'
+    ans += RESTORE_COLORS
     return ans
 
 

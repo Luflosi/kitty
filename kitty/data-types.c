@@ -12,6 +12,8 @@
 #undef _DARWIN_C_SOURCE
 #endif
 #include "data-types.h"
+#include "cleanup.h"
+#include "safe-wrappers.h"
 #include "control-codes.h"
 #include "wcwidth-std.h"
 #include "wcswidth.h"
@@ -40,18 +42,17 @@ static PyObject*
 process_group_map() {
     int num_of_processes = proc_listallpids(NULL, 0);
     size_t bufsize = sizeof(pid_t) * (num_of_processes + 1024);
-    pid_t *buf = malloc(bufsize);
+    FREE_AFTER_FUNCTION pid_t *buf = malloc(bufsize);
     if (!buf) return PyErr_NoMemory();
     num_of_processes = proc_listallpids(buf, (int)bufsize);
     PyObject *ans = PyTuple_New(num_of_processes);
-    if (ans == NULL) { free(buf); return PyErr_NoMemory(); }
+    if (ans == NULL) { return PyErr_NoMemory(); }
     for (int i = 0; i < num_of_processes; i++) {
         long pid = buf[i], pgid = getpgid(buf[i]);
         PyObject *t = Py_BuildValue("ll", pid, pgid);
-        if (t == NULL) { free(buf); Py_DECREF(ans); return NULL; }
+        if (t == NULL) { Py_DECREF(ans); return NULL; }
         PyTuple_SET_ITEM(ans, i, t);
     }
-    free(buf);
     return ans;
 }
 #endif
@@ -110,7 +111,7 @@ open_tty(PyObject *self UNUSED, PyObject *args) {
     int flags = O_RDWR | O_CLOEXEC | O_NOCTTY;
     if (!read_with_timeout) flags |= O_NONBLOCK;
     static char ctty[L_ctermid+1];
-    int fd = open(ctermid(ctty), flags);
+    int fd = safe_open(ctermid(ctty), flags, 0);
     if (fd == -1) { PyErr_Format(PyExc_OSError, "Failed to open controlling terminal: %s (identified with ctermid()) with error: %s", ctty, strerror(errno)); return NULL; }
     struct termios *termios_p = calloc(1, sizeof(struct termios));
     if (!termios_p) return PyErr_NoMemory();
@@ -192,6 +193,7 @@ static struct PyModuleDef module = {
 extern int init_LineBuf(PyObject *);
 extern int init_HistoryBuf(PyObject *);
 extern int init_Cursor(PyObject *);
+extern int init_DiskCache(PyObject *);
 extern bool init_child_monitor(PyObject *);
 extern int init_Line(PyObject *);
 extern int init_ColorProfile(PyObject *);
@@ -215,6 +217,7 @@ extern bool init_cocoa(PyObject *module);
 extern bool init_macos_process_info(PyObject *module);
 #else
 extern bool init_freetype_library(PyObject*);
+extern bool init_freetype_render_ui_text(PyObject*);
 #endif
 
 
@@ -224,6 +227,10 @@ PyInit_fast_data_types(void) {
 
     m = PyModule_Create(&module);
     if (m == NULL) return NULL;
+    if (Py_AtExit(run_at_exit_cleanup_functions) != 0) {
+        PyErr_SetString(PyExc_RuntimeError, "Failed to register the atexit cleanup handler");
+        return NULL;
+    }
     init_monotonic();
 
     if (!init_logging(m)) return NULL;
@@ -231,6 +238,7 @@ PyInit_fast_data_types(void) {
     if (!init_HistoryBuf(m)) return NULL;
     if (!init_Line(m)) return NULL;
     if (!init_Cursor(m)) return NULL;
+    if (!init_DiskCache(m)) return NULL;
     if (!init_child_monitor(m)) return NULL;
     if (!init_ColorProfile(m)) return NULL;
     if (!init_Screen(m)) return NULL;
@@ -251,6 +259,7 @@ PyInit_fast_data_types(void) {
     if (!init_freetype_library(m)) return NULL;
     if (!init_fontconfig_library(m)) return NULL;
     if (!init_desktop(m)) return NULL;
+    if (!init_freetype_render_ui_text(m)) return NULL;
 #endif
     if (!init_fonts(m)) return NULL;
 

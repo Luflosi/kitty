@@ -1,8 +1,185 @@
 Changelog
 ==============
 
-|kitty| is a feature full, cross-platform, *fast*, GPU based terminal emulator.
+|kitty| is a feature-rich, cross-platform, *fast*, GPU based terminal.
 To update |kitty|, :doc:`follow the instructions <binary>`.
+
+0.20.2 [2021-04-28]
+----------------------
+
+- A new protocol extension to :ref:`unscroll <unscroll>` text from the
+  scrollback buffer onto the screen. Useful, for example, to restore
+  the screen after showing completions below the shell prompt.
+
+- A new remote control command :ref:`at_env` to change the default
+  environment passed to newly created windows (:iss:`3529`)
+
+- Linux: Fix binary kitty builds not able to load fonts in WOFF2 format
+  (:iss:`3506`)
+
+- macOS: Prevent :kbd:`option` based shortcuts for being used for global menu
+  actions (:iss:`3515`)
+
+- Fix ``kitty @ close-tab`` not working with pipe based remote control
+  (:iss:`3510`)
+
+- Fix removal of inactive tab that is before the currently active tab causing
+  the highlighted tab to be incorrect (:iss:`3516`)
+
+- icat kitten: Respect EXIF orientation when displaying JPEG images
+  (:iss:`3518`)
+
+- GNOME: Fix maximize state not being remembered when focus changes and window
+  decorations are hidden (:iss:`3507`)
+
+- GNOME: Add a new :opt:`wayland_titlebar_color` option to control the color of the
+  kitty window title bar
+
+- Fix reading :option:`kitty --session` from ``STDIN`` not working when the
+  :option:`kitty --detach` option is used (:iss:`3523`)
+
+- Special case rendering of the few remaining Powerline box drawing chars
+  (:iss:`3535`)
+
+- Fix ``kitty @ set-colors`` not working for the :opt:`active_tab_foreground`.
+
+
+0.20.1 [2021-04-19]
+----------------------
+
+- icat: Fix some broken GIF images with no frame delays not being animated
+  (:iss:`3498`)
+
+- hints kitten: Fix sending hyperlinks to their default handler not working
+  (:pull:`3500`)
+
+- Wayland: Fix regression in previous release causing window decorations to
+  be drawn even when compositor supports server side decorations (:iss:`3501`)
+
+
+0.20.0 [2021-04-19]
+----------------------
+
+- Support display of animated images ``kitty +kitten icat animation.gif``. See
+  :ref:`animation_protocol` for details on animation support in the kitty
+  graphics protocol.
+
+- A new keyboard reporting protocol with various advanced features that can be
+  used by full screen terminal programs and even games, see
+  :doc:`keyboard-protocol` (:iss:`3248`)
+
+- **Backward incompatibility**: Session files now use the full :doc:`launch <launch>`
+  command with all its capabilities. However, the syntax of the command is
+  slightly different from before. In particular watchers are now specified
+  directly on launch and environment variables are set using ``--env``.
+
+- Allow setting colors when creating windows using the :doc:`launch <launch>` command.
+
+- A new option :opt:`tab_powerline_style` to control the appearance of the tab
+  bar when using the powerline tab bar style.
+
+- A new option :opt:`scrollback_fill_enlarged_window` to fill extra lines in
+  the window when the window is expanded with lines from the scrollback
+  (:pull:`3371`)
+
+- diff kitten: Implement recursive diff over SSH (:iss:`3268`)
+
+- ssh kitten: Allow using python instead of the shell on the server, useful if
+  the shell used is a non-POSIX compliant one, such as fish (:iss:`3277`)
+
+- Add support for the color settings stack that XTerm copied from us without
+  acknowledgement and decided to use incompatible escape codes for.
+
+- Add entries to the terminfo file for some user capabilities that are shared
+  with XTerm (:pull:`3193`)
+
+- The launch command now does more sophisticated resolving of executables to
+  run. The system-wide PATH is used first, then system specific default paths,
+  and finally the PATH inside the shell.
+
+- Double clicking on empty tab bar area now opens a new tab (:iss:`3201`)
+
+- kitty @ ls: Show only environment variables that are different for each
+  window, by default.
+
+- When passing a directory or a non-executable file as the program to run to
+  kitty opens it with the shell or by parsing the shebang, instead of just failing.
+
+- Linux: Fix rendering of emoji followed by the graphics variation selector not
+  being colored with some fonts (:iss:`3211`)
+
+- Unicode input: Fix using index in select by name mode not working for indices
+  larger than 16. Also using an index does not filter the list of matches. (:pull:`3219`)
+
+- Wayland: Add support for the text input protocol (:iss:`3410`)
+
+- Wayland: Fix mouse handling when using client side decorations
+
+- Wayland: Fix un-maximizing a window not restoring its size to what it was
+  before being maximized
+
+- GNOME/Wayland: Improve window decorations the titlebar now shows the window
+  title. Allow running under Wayland on GNOME by default. (:iss:`3284`)
+
+- Panel kitten: Allow setting WM_CLASS (:iss:`3233`)
+
+- macOS: Add menu items to close the OS window and the current tab (:pull:`3240`, :iss:`3246`)
+
+- macOS: Allow opening script and command files with kitty (:iss:`3366`)
+
+- Also detect ``gemini://`` URLs when hovering with the mouse (:iss:`3370`)
+
+- When using a non-US keyboard layout and pressing :kbd:`ctrl+key` when
+  the key matches an English key, send that to the program running in the
+  terminal automatically (:iss:`2000`)
+
+- When matching shortcuts, also match on shifted keys, so a shortcut defined as
+  :kbd:`ctrl+plus` will match a keyboard where you have to press
+  :kbd:`shift+equal` to get the plus key (:iss:`2000`)
+
+- Fix extra space at bottom of OS window when using the fat layout with the tab bar at the
+  top (:iss:`3258`)
+
+- Fix window icon not working on X11 with 64bits (:iss:`3260`)
+
+- Fix OS window sizes under 100px resulting in scaled display (:iss:`3307`)
+
+- Fix rendering of ligatures in the latest release of Cascadia code, which for
+  some reason puts empty glyphs after the ligature glyph rather than before it
+  (:iss:`3313`)
+
+- Improve handling of infinite length ligatures in newer versions of FiraCode
+  and CascadiaCode. Now such ligatures are detected based on glyph naming
+  convention. This removes the gap in the ligatures at cell boundaries (:iss:`2695`)
+
+- macOS: Disable the native operating system tabs as they are non-functional
+  and can be confusing (:iss:`3325`)
+
+- hints kitten: When using the linenumber action with a background action,
+  preserve the working directory (:iss:`3352`)
+
+- Graphics protocol: Fix suppression of responses not working for chunked
+  transmission (:iss:`3375`)
+
+- Fix inactive tab closing causing active tab to change (:iss:`3398`)
+
+- Fix a crash on systems using musl as libc (:iss:`3395`)
+
+- Improve rendering of rounded corners by using a rectircle equation rather
+  than a cubic bezier (:iss:`3409`)
+
+- Graphics protocol: Add a control to allow clients to specify that the cursor
+  should not move when displaying an image (:iss:`3411`)
+
+- Fix marking of text not working on lines that contain zero cells
+  (:iss:`3403`)
+
+- Fix the selection getting changed if the screen contents scroll while
+  the selection is in progress (:iss:`3431`)
+
+- X11: Fix :opt:`resize_in_steps` being applied even when window is maximized
+  (:iss:`3473`)
+
 
 0.19.3 [2020-12-19]
 -------------------

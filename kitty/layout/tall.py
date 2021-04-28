@@ -3,11 +3,11 @@
 # License: GPLv3 Copyright: 2020, Kovid Goyal <kovid at kovidgoyal.net>
 
 from itertools import islice, repeat
-from typing import Dict, Generator, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Generator, List, Optional, Sequence, Tuple
 
 from kitty.borders import BorderColor
 from kitty.conf.utils import to_bool
-from kitty.constants import Edges
+from kitty.types import Edges
 from kitty.typing import EdgeLiteral, WindowType
 from kitty.window_list import WindowGroup, WindowList
 
@@ -169,7 +169,7 @@ class Tall(Layout):
                 if is_fat:
                     xl, yl = yl, xl
                 yield wg, xl, yl, True
-            size = (lgd.central.height if is_fat else lgd.central.width) - start
+            size = (lgd.central.bottom if is_fat else lgd.central.right) - start
 
         ylayout = self.variable_layout(all_windows, self.biased_map)
         for i, wg in enumerate(all_windows.iter_all_layoutable_groups()):
@@ -277,6 +277,13 @@ class Tall(Layout):
             start_offset=int(not mirrored), end_offset=int(mirrored)
         )
         yield from perp_borders[1:-1]
+
+    def layout_state(self) -> Dict[str, Any]:
+        return {
+            'num_full_size_windows': self.num_full_size_windows,
+            'main_bias': self.main_bias,
+            'biased_map': self.biased_map
+        }
 
 
 class Fat(Tall):

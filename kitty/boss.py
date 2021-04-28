@@ -29,14 +29,14 @@ from .constants import (
 )
 from .fast_data_types import (
     CLOSE_BEING_CONFIRMED, IMPERATIVE_CLOSE_REQUESTED, NO_CLOSE_REQUESTED,
-    ChildMonitor, add_timer, background_opacity_of, change_background_opacity,
-    change_os_window_state, cocoa_set_menubar_title, create_os_window,
-    current_application_quit_request, current_os_window, destroy_global_data,
-    focus_os_window, get_clipboard_string, global_font_size,
-    mark_os_window_for_close, os_window_font_size, patch_global_colors,
-    safe_pipe, set_application_quit_request, set_background_image, set_boss,
-    set_clipboard_string, set_in_sequence_mode, thread_write,
-    toggle_fullscreen, toggle_maximized
+    ChildMonitor, KeyEvent, add_timer, background_opacity_of,
+    change_background_opacity, change_os_window_state, cocoa_set_menubar_title,
+    create_os_window, current_application_quit_request, current_os_window,
+    destroy_global_data, focus_os_window, get_clipboard_string,
+    global_font_size, mark_os_window_for_close, os_window_font_size,
+    patch_global_colors, safe_pipe, set_application_quit_request,
+    set_background_image, set_boss, set_clipboard_string, set_in_sequence_mode,
+    thread_write, toggle_fullscreen, toggle_maximized
 )
 from .keys import get_shortcut, shortcut_matches
 from .layout.base import set_layout_options
@@ -48,6 +48,7 @@ from .session import Session, create_sessions, get_os_window_sizing_data
 from .tabs import (
     SpecialWindow, SpecialWindowInstance, Tab, TabDict, TabManager
 )
+from .types import SingleKey
 from .typing import PopenType, TypedDict
 from .utils import (
     func_name, get_editor, get_primary_selection, is_path_in_temp_dir,
@@ -63,6 +64,8 @@ class OSWindowDict(TypedDict):
     platform_window_id: Optional[int]
     is_focused: bool
     tabs: List[TabDict]
+    wm_class: str
+    wm_name: str
 
 
 def listen_on(spec: str) -> int:
@@ -138,10 +141,10 @@ class Boss:
         opts: Options,
         args: CLIOptions,
         cached_values: Dict[str, Any],
-        new_os_window_trigger: Optional[Tuple[int, bool, int]],
-        paste_trigger: Optional[Tuple[int, bool, int]]
+        global_shortcuts: Dict[str, SingleKey]
     ):
         set_layout_options(opts)
+        self.cocoa_application_launched = False
         self.clipboard_buffers: Dict[str, str] = {}
         self.update_check_process: Optional[PopenType] = None
         self.window_id_map: WeakValueDictionary[int, Window] = WeakValueDictionary()
@@ -166,10 +169,9 @@ class Boss:
         set_boss(self)
         self.opts, self.args = opts, args
         self.keymap = self.opts.keymap.copy()
-        if new_os_window_trigger is not None:
-            self.keymap.pop(new_os_window_trigger, None)
-        if paste_trigger is not None:
-            self.keymap.pop(paste_trigger, None)
+        self.global_shortcuts_map = {v: KeyAction(k) for k, v in global_shortcuts.items()}
+        for sc in global_shortcuts.values():
+            self.keymap.pop(sc, None)
         if is_macos:
             from .fast_data_types import (
                 cocoa_set_notification_activated_callback
@@ -177,12 +179,8 @@ class Boss:
             cocoa_set_notification_activated_callback(notification_activated)
 
     def startup_first_child(self, os_window_id: Optional[int]) -> None:
-        from kitty.launch import load_watch_modules
         startup_sessions = create_sessions(self.opts, self.args, default_session=self.opts.startup_session)
-        watchers = load_watch_modules(self.args.watcher)
         for startup_session in startup_sessions:
-            if watchers is not None and watchers.has_watchers:
-                startup_session.add_watchers_to_all_windows(watchers)
             self.add_os_window(startup_session, os_window_id=os_window_id)
             os_window_id = None
             if self.args.start_as != 'normal':
@@ -203,16 +201,20 @@ class Boss:
         if os_window_id is None:
             size_data = get_os_window_sizing_data(opts_for_size or self.opts, startup_session)
             wclass = wclass or getattr(startup_session, 'os_window_class', None) or self.args.cls or appname
+            wname = wname or self.args.name or wclass
             with startup_notification_handler(do_notify=startup_id is not None, startup_id=startup_id) as pre_show_callback:
                 os_window_id = create_os_window(
                         initial_window_size_func(size_data, self.cached_values),
                         pre_show_callback,
-                        self.args.title or appname, wname or self.args.name or wclass, wclass)
-        tm = TabManager(os_window_id, self.opts, self.args, startup_session)
+                        self.args.title or appname, wname, wclass)
+        else:
+            wname = self.args.name or self.args.cls or appname
+            wclass = self.args.cls or appname
+        tm = TabManager(os_window_id, self.opts, self.args, wclass, wname, startup_session)
         self.os_window_map[os_window_id] = tm
         return os_window_id
 
-    def list_os_windows(self) -> Generator[OSWindowDict, None, None]:
+    def list_os_windows(self, self_window: Optional[Window] = None) -> Generator[OSWindowDict, None, None]:
         with cached_process_data():
             active_tab, active_window = self.active_tab, self.active_window
             active_tab_manager = self.active_tab_manager
@@ -221,7 +223,9 @@ class Boss:
                     'id': os_window_id,
                     'platform_window_id': platform_window_id(os_window_id),
                     'is_focused': tm is active_tab_manager,
-                    'tabs': list(tm.list_tabs(active_tab, active_window)),
+                    'tabs': list(tm.list_tabs(active_tab, active_window, self_window)),
+                    'wm_class': tm.wm_class,
+                    'wm_name': tm.wm_name
                 }
 
     @property
@@ -283,6 +287,13 @@ class Boss:
                 if tab.matches(field, pat):
                     yield tab
                     found = True
+        elif field in ('window_id', 'window_title'):
+            wf = field.split('_')[1]
+            tabs = {self.tab_for_window(w) for w in self.match_windows(f'{wf}:{exp}')}
+            for q in tabs:
+                if q:
+                    found = True
+                    yield q
         if not found:
             tabs = {self.tab_for_window(w) for w in self.match_windows(match)}
             for q in tabs:
@@ -508,10 +519,10 @@ class Boss:
             run_update_check(self.opts.update_check_interval * 60 * 60)
             self.update_check_started = True
 
-    def activate_tab_at(self, os_window_id: int, x: int) -> int:
+    def activate_tab_at(self, os_window_id: int, x: int, is_double: bool = False) -> int:
         tm = self.os_window_map.get(os_window_id)
         if tm is not None:
-            tm.activate_tab_at(x)
+            tm.activate_tab_at(x, is_double)
 
     def on_window_resize(self, os_window_id: int, w: int, h: int, dpi_changed: bool) -> None:
         if dpi_changed:
@@ -650,20 +661,21 @@ class Boss:
         if t is not None:
             return t.active_window
 
-    def dispatch_special_key(self, key: int, native_key: int, action: int, mods: int) -> bool:
+    def dispatch_possible_special_key(self, ev: KeyEvent) -> bool:
         # Handles shortcuts, return True if the key was consumed
-        key_action = get_shortcut(self.keymap, mods, key, native_key)
+        key_action = get_shortcut(self.keymap, ev)
         if key_action is None:
-            sequences = get_shortcut(self.opts.sequence_map, mods, key, native_key)
+            sequences = get_shortcut(self.opts.sequence_map, ev)
             if sequences and not isinstance(sequences, KeyAction):
                 self.pending_sequences = sequences
                 set_in_sequence_mode(True)
                 return True
+            if self.global_shortcuts_map and get_shortcut(self.global_shortcuts_map, ev):
+                return True
         elif isinstance(key_action, KeyAction):
-            self.current_key_press_info = key, native_key, action, mods
             return self.dispatch_action(key_action)
 
-    def process_sequence(self, key: int, native_key: int, action: Any, mods: int) -> None:
+    def process_sequence(self, ev: KeyEvent) -> None:
         if not self.pending_sequences:
             set_in_sequence_mode(False)
             return
@@ -671,7 +683,7 @@ class Boss:
         remaining = {}
         matched_action = None
         for seq, key_action in self.pending_sequences.items():
-            if shortcut_matches(seq[0], mods, key, native_key):
+            if shortcut_matches(seq[0], ev):
                 seq = seq[1:]
                 if seq:
                     remaining[seq] = key_action
@@ -842,7 +854,7 @@ class Boss:
                 s.shutdown(socket.SHUT_RDWR)
             s.close()
 
-    def display_scrollback(self, window: Window, data: Optional[bytes], cmd: Optional[List[str]]) -> None:
+    def display_scrollback(self, window: Window, data: Optional[bytes], cmd: List[str]) -> None:
         tab = self.active_tab
         if tab is not None:
             tab.new_special_window(
@@ -854,7 +866,7 @@ class Boss:
         confpath = prepare_config_file_for_editing()
         # On macOS vim fails to handle SIGWINCH if it occurs early, so add a
         # small delay.
-        cmd = [kitty_exe(), '+runpy', 'import os, sys, time; time.sleep(0.05); os.execvp(sys.argv[1], sys.argv[1:])'] + get_editor() + [confpath]
+        cmd = [kitty_exe(), '+runpy', 'import os, sys, time; time.sleep(0.05); os.execvp(sys.argv[1], sys.argv[1:])'] + get_editor(self.opts) + [confpath]
         self.new_os_window(*cmd)
 
     def get_output(self, source_window: Window, num_lines: Optional[int] = 1) -> str:
@@ -1514,6 +1526,7 @@ class Boss:
         tab_id_map: Dict[int, Optional[Union[str, int]]] = {}
         current_tab = self.active_tab
         done_tab_id: Optional[Union[str, int]] = None
+        done_called = False
 
         for i, tab in enumerate(self.all_tabs):
             if tab is not current_tab:
@@ -1527,10 +1540,13 @@ class Boss:
         lines.append(fmt.format(new_idx, 'New OS Window'))
 
         def done(data: Dict[str, Any], target_window_id: int, self: Boss) -> None:
-            nonlocal done_tab_id
+            nonlocal done_tab_id, done_called
             done_tab_id = tab_id_map[int(data['groupdicts'][0]['index'])]
+            done_called = True
 
         def done2(target_window_id: int, self: Boss) -> None:
+            if not done_called:
+                return
             tab_id = done_tab_id
             target_window = None
             for w in self.all_windows:
@@ -1620,3 +1636,27 @@ class Boss:
             self.set_active_window(w, switch_os_window_if_needed=True)
         if report:
             w.report_notification_activated(identifier)
+
+    def show_kitty_env_vars(self) -> None:
+        w = self.active_window
+        if w:
+            output = '\n'.join(f'{k}={v}' for k, v in os.environ.items()).encode('utf-8')
+            self.display_scrollback(w, output, ['less'])
+
+    def open_file(self, path: str) -> None:
+        if path == ":cocoa::application launched::":
+            self.cocoa_application_launched = True
+            return
+
+        def new_os_window() -> None:
+            self.new_os_window(path)
+
+        if self.cocoa_application_launched or not self.os_window_map:
+            return new_os_window()
+        tab = self.active_tab
+        if tab is None:
+            return new_os_window()
+        w = tab.active_window
+        self.new_window(path)
+        if w is not None:
+            tab.remove_window(w)

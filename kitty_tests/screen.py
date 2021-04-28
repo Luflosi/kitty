@@ -93,6 +93,17 @@ class TestScreen(BaseTest):
         self.ae(str(s.line(4)), 'a\u0306b1\u030623')
         self.ae((s.cursor.x, s.cursor.y), (2, 4))
 
+    def test_rep(self):
+        s = self.create_screen()
+        s.draw('a')
+        parse_bytes(s, b'\x1b[b')
+        self.ae(str(s.line(0)), 'aa')
+        parse_bytes(s, b'\x1b[3b')
+        self.ae(str(s.line(0)), 'a'*5)
+        s.draw(' ')
+        parse_bytes(s, b'\x1b[3b')
+        self.ae(str(s.line(1)), ' '*4)
+
     def test_emoji_skin_tone_modifiers(self):
         s = self.create_screen()
         q = chr(0x1f469) + chr(0x1f3fd)
@@ -291,6 +302,65 @@ class TestScreen(BaseTest):
         x_before = s.cursor.x
         s.resize(s.lines - 1, s.columns)
         self.ae(x_before, s.cursor.x)
+
+    def test_scrollback_fill_after_resize(self):
+        def prepare_screen(content=()):
+            ans = self.create_screen(options={'scrollback_fill_enlarged_window': True})
+            for line in content:
+                ans.draw(line)
+                ans.linefeed()
+                ans.carriage_return()
+            return ans
+
+        def assert_lines(*lines):
+            return self.ae(lines, tuple(str(s.line(i)) for i in range(s.lines)))
+
+        # test the reverse scroll function
+        s = prepare_screen(map(str, range(6)))
+        assert_lines('2', '3', '4', '5', '')
+        s.reverse_scroll(2, True)
+        assert_lines('0', '1', '2', '3', '4')
+
+        # Height increased, width unchanged → pull down lines to fill new space at the top
+        s = prepare_screen(map(str, range(6)))
+        assert_lines('2', '3', '4', '5', '')
+        dist_from_bottom = s.lines - s.cursor.y
+        s.resize(7, s.columns)
+        assert_lines('0', '1', '2', '3', '4', '5', '')
+        self.ae(dist_from_bottom, s.lines - s.cursor.y)
+
+        # Height increased, width increased → rewrap, pull down
+        s = prepare_screen(['0', '1', '2', '3' * 15])
+        assert_lines('2', '33333', '33333', '33333', '')
+        s.resize(7, 12)
+        assert_lines('0', '1', '2', '333333333333', '333', '', '')
+
+        # Height increased, width decreased → rewrap, pull down if possible
+        s = prepare_screen(['0', '1', '2', '3' * 5])
+        assert_lines('0', '1', '2', '33333', '')
+        s.resize(6, 4)
+        assert_lines('0', '1', '2', '3333', '3', '')
+
+        # Height unchanged, width increased → rewrap, pull down if possible
+        s = prepare_screen(['0', '1', '2', '3' * 15])
+        assert_lines('2', '33333', '33333', '33333', '')
+        s.resize(s.lines, 12)
+        assert_lines('1', '2', '333333333333', '333', '')
+
+        # Height decreased, width increased → rewrap, pull down if possible
+        s = prepare_screen(['0', '1', '2', '3' * 15])
+        assert_lines('2', '33333', '33333', '33333', '')
+        s.resize(4, 12)
+        assert_lines('2', '333333333333', '333', '')
+
+        # Height increased with large continued text
+        s = self.create_screen(options={'scrollback_fill_enlarged_window': True})
+        s.draw(('x' * (s.columns * s.lines * 2)) + 'abcde')
+        s.carriage_return(), s.linefeed()
+        s.draw('>')
+        assert_lines('xxxxx', 'xxxxx', 'xxxxx', 'abcde', '>')
+        s.resize(s.lines + 2, s.columns)
+        assert_lines('xxxxx', 'xxxxx', 'xxxxx', 'xxxxx', 'xxxxx', 'abcde', '>')
 
     def test_tab_stops(self):
         # Taken from vttest/main.c
@@ -592,6 +662,13 @@ class TestScreen(BaseTest):
         self.ae(s.marked_cells(), cells(8))
         s.set_marker(marker_from_regex('\t', 3))
         self.ae(s.marked_cells(), cells(*range(8)))
+        s = self.create_screen()
+        s.cursor.x = 2
+        s.draw('x')
+        s.cursor.x += 1
+        s.draw('x')
+        s.set_marker(marker_from_function(mark_x))
+        self.ae(s.marked_cells(), [(2, 0, 1), (4, 0, 2)])
 
     def test_hyperlinks(self):
         s = self.create_screen()
@@ -716,3 +793,74 @@ class TestScreen(BaseTest):
 
         self.ae(str(s.linebuf), '0\n5\n6\n7\n\n')
         self.ae(str(s.historybuf), '')
+
+    def test_key_encoding_flags_stack(self):
+        s = self.create_screen()
+        c = s.callbacks
+
+        def w(code, p1='', p2=''):
+            p = f'{p1}'
+            if p2:
+                p += f';{p2}'
+            return parse_bytes(s, f'\033[{code}{p}u'.encode('ascii'))
+
+        def ac(flags):
+            parse_bytes(s, '\033[?u'.encode('ascii'))
+            self.ae(c.wtcbuf, f'\033[?{flags}u'.encode('ascii'))
+            c.clear()
+
+        ac(0)
+        w('=', 0b1001)
+        ac(0b1001)
+        w('=', 0b0011, 2)
+        ac(0b1011)
+        w('=', 0b0110, 3)
+        ac(0b1001)
+        s.reset()
+        ac(0)
+
+        w('>', 0b0011)
+        ac(0b0011)
+        w('=', 0b1111)
+        ac(0b1111)
+        w('>', 0b10)
+        ac(0b10)
+        w('<')
+        ac(0b1111)
+        for i in range(10):
+            w('<')
+            ac(0)
+        s.reset()
+
+        for i in range(1, 16):
+            w('>', i)
+        ac(15)
+        w('<'), ac(14), w('<'), ac(13)
+
+    def test_color_stack(self):
+        s = self.create_screen()
+        c = s.callbacks
+
+        def w(code):
+            return parse_bytes(s, ('\033[' + code).encode('ascii'))
+
+        def ac(idx, count):
+            self.ae(c.wtcbuf, f'\033[{idx};{count}#Q'.encode('ascii'))
+            c.clear()
+
+        w('#R')
+        ac(0, 0)
+
+        w('#P')
+        w('#R')
+        ac(0, 1)
+        w('#10P')
+        w('#R')
+        ac(0, 1)
+        w('#Q')
+        w('#R')
+        ac(0, 0)
+        for i in range(20):
+            w('#P')
+        w('#R')
+        ac(9, 10)

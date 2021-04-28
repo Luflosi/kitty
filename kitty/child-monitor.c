@@ -6,6 +6,7 @@
  */
 
 #include "loop-utils.h"
+#include "safe-wrappers.h"
 #include "state.h"
 #include "threading.h"
 #include "screen.h"
@@ -84,8 +85,6 @@ static struct pollfd fds[MAX_CHILDREN + EXTRA_FDS] = {{0}};
 static pthread_mutex_t children_lock, talk_lock;
 static bool kill_signal_received = false;
 static ChildMonitor *the_monitor = NULL;
-static uint8_t drain_buf[1024];
-
 
 typedef struct {
     pid_t pid;
@@ -164,7 +163,6 @@ dealloc(ChildMonitor* self) {
     pthread_mutex_destroy(&talk_lock);
     Py_CLEAR(self->dump_callback);
     Py_CLEAR(self->death_notify);
-    Py_TYPE(self)->tp_free((PyObject*)self);
     while (remove_queue_count) {
         remove_queue_count--;
         FREE_CHILD(remove_queue[remove_queue_count]);
@@ -174,6 +172,7 @@ dealloc(ChildMonitor* self) {
         FREE_CHILD(add_queue[add_queue_count]);
     }
     free_loop_data(&self->io_loop_data);
+    Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
 static void
@@ -191,12 +190,15 @@ static PyObject *
 start(PyObject *s, PyObject *a UNUSED) {
 #define start_doc "start() -> Start the I/O thread"
     ChildMonitor *self = (ChildMonitor*)s;
+    int ret;
     if (self->talk_fd > -1 || self->listen_fd > -1) {
-        if (pthread_create(&self->talk_thread, NULL, talk_loop, self) != 0) return PyErr_SetFromErrno(PyExc_OSError);
+        if ((ret = pthread_create(&self->talk_thread, NULL, talk_loop, self)) != 0) {
+            return PyErr_Format(PyExc_OSError, "Failed to start talk thread with error: %s", strerror(ret));
+        }
         talk_thread_started = true;
     }
-    int ret = pthread_create(&self->io_thread, NULL, io_loop, self);
-    if (ret != 0) return PyErr_SetFromErrno(PyExc_OSError);
+    ret = pthread_create(&self->io_thread, NULL, io_loop, self);
+    if (ret != 0) return PyErr_Format(PyExc_OSError, "Failed to start I/O thread with error: %s", strerror(ret));
 
     Py_RETURN_NONE;
 }
@@ -543,7 +545,7 @@ change_menubar_title(PyObject *title UNUSED) {
 }
 
 static inline bool
-prepare_to_render_os_window(OSWindow *os_window, monotonic_t now, unsigned int *active_window_id, color_type *active_window_bg, unsigned int *num_visible_windows, bool *all_windows_have_same_bg) {
+prepare_to_render_os_window(OSWindow *os_window, monotonic_t now, unsigned int *active_window_id, color_type *active_window_bg, unsigned int *num_visible_windows, bool *all_windows_have_same_bg, bool scan_for_animated_images) {
 #define TD os_window->tab_bar_render_data
     bool needs_render = os_window->needs_render;
     os_window->needs_render = false;
@@ -588,6 +590,14 @@ prepare_to_render_os_window(OSWindow *os_window, monotonic_t now, unsigned int *
                 set_os_window_title_from_window(w, os_window);
                 *active_window_bg = window_bg;
             } else WD.screen->cursor_render_info.is_visible = false;
+            if (scan_for_animated_images) {
+                monotonic_t min_gap;
+                if (scan_active_animations(WD.screen->grman, now, &min_gap, true)) needs_render = true;
+                if (min_gap < MONOTONIC_T_MAX) {
+                    global_state.check_for_active_animated_images = true;
+                    set_maximum_wait(min_gap);
+                }
+            }
             if (send_cell_data_to_gpu(WD.vao_idx, WD.gvao_idx, WD.xstart, WD.ystart, WD.dx, WD.dy, WD.screen, os_window)) needs_render = true;
             if (WD.screen->start_visual_bell_at != 0) needs_render = true;
         }
@@ -660,13 +670,16 @@ no_render_frame_received_recently(OSWindow *w, monotonic_t now, monotonic_t max_
 
 static inline void
 render(monotonic_t now, bool input_read) {
-    EVDBG("input_read: %d", input_read);
+    EVDBG("input_read: %d, check_for_active_animated_images: %d", input_read, global_state.check_for_active_animated_images);
     static monotonic_t last_render_at = MONOTONIC_T_MIN;
     monotonic_t time_since_last_render = last_render_at == MONOTONIC_T_MIN ? OPT(repaint_delay) : now - last_render_at;
     if (!input_read && time_since_last_render < OPT(repaint_delay)) {
         set_maximum_wait(OPT(repaint_delay) - time_since_last_render);
         return;
     }
+
+    const bool scan_for_animated_images = global_state.check_for_active_animated_images;
+    global_state.check_for_active_animated_images = false;
 
     for (size_t i = 0; i < global_state.num_os_windows; i++) {
         OSWindow *w = global_state.os_windows + i;
@@ -701,7 +714,7 @@ render(monotonic_t now, bool input_read) {
         bool all_windows_have_same_bg;
         color_type active_window_bg = 0;
         if (!w->fonts_data) { log_error("No fonts data found for window id: %llu", w->id); continue; }
-        if (prepare_to_render_os_window(w, now, &active_window_id, &active_window_bg, &num_visible_windows, &all_windows_have_same_bg)) needs_render = true;
+        if (prepare_to_render_os_window(w, now, &active_window_id, &active_window_bg, &num_visible_windows, &all_windows_have_same_bg, scan_for_animated_images)) needs_render = true;
         if (w->last_active_window_id != active_window_id || w->last_active_tab != w->active_tab || w->focused_at_last_render != w->is_focused) needs_render = true;
         if (w->render_calls < 3 && w->bgimage && w->bgimage->texture_id) needs_render = true;
         if (needs_render) render_os_window(w, now, active_window_id, active_window_bg, num_visible_windows, all_windows_have_same_bg);
@@ -799,7 +812,7 @@ cm_thread_write(PyObject UNUSED *self, PyObject *args) {
     data->fd = fd;
     memcpy(data->buf, buf, data->sz);
     int ret = pthread_create(&thread, NULL, thread_write, data);
-    if (ret != 0) { safe_close(fd, __FILE__, __LINE__); free_twd(data); return PyErr_SetFromErrno(PyExc_OSError); }
+    if (ret != 0) { safe_close(fd, __FILE__, __LINE__); free_twd(data); return PyErr_Format(PyExc_OSError, "Failed to start write thread with error: %s", strerror(ret)); }
     pthread_detach(thread);
     Py_RETURN_NONE;
 }
@@ -922,14 +935,25 @@ process_pending_closes(ChildMonitor *self) {
 // If we create new OS windows during wait_events(), using global menu actions
 // via the mouse causes a crash because of the way autorelease pools work in
 // glfw/cocoa. So we use a flag instead.
-static unsigned int cocoa_pending_actions = 0;
-static char *cocoa_pending_actions_wd = NULL;
+static CocoaPendingAction cocoa_pending_actions = NO_COCOA_PENDING_ACTION;
+typedef struct {
+    char* wd;
+    char **open_files;
+    size_t open_files_count;
+    size_t open_files_capacity;
+} CocoaPendingActionsData;
+static CocoaPendingActionsData cocoa_pending_actions_data = {0};
 
 void
 set_cocoa_pending_action(CocoaPendingAction action, const char *wd) {
     if (wd) {
-        if (cocoa_pending_actions_wd) free(cocoa_pending_actions_wd);
-        cocoa_pending_actions_wd = strdup(wd);
+        if (action == OPEN_FILE) {
+            ensure_space_for(&cocoa_pending_actions_data, open_files, char*, cocoa_pending_actions_data.open_files_count + 8, open_files_capacity, 8, true);
+            cocoa_pending_actions_data.open_files[cocoa_pending_actions_data.open_files_count++] = strdup(wd);
+        } else {
+            if (cocoa_pending_actions_data.wd) free(cocoa_pending_actions_data.wd);
+            cocoa_pending_actions_data.wd = strdup(wd);
+        }
     }
     cocoa_pending_actions |= action;
     // The main loop may be blocking on the event queue, if e.g. unfocused.
@@ -967,12 +991,28 @@ process_global_state(void *data) {
         if (cocoa_pending_actions) {
             if (cocoa_pending_actions & PREFERENCES_WINDOW) { call_boss(edit_config_file, NULL); }
             if (cocoa_pending_actions & NEW_OS_WINDOW) { call_boss(new_os_window, NULL); }
+            if (cocoa_pending_actions & CLOSE_OS_WINDOW) { call_boss(close_os_window, NULL); }
+            if (cocoa_pending_actions & CLOSE_TAB) { call_boss(close_tab, NULL); }
+            if (cocoa_pending_actions & NEW_TAB) { call_boss(new_tab, NULL); }
+            if (cocoa_pending_actions & NEXT_TAB) { call_boss(next_tab, NULL); }
+            if (cocoa_pending_actions & PREVIOUS_TAB) { call_boss(previous_tab, NULL); }
+            if (cocoa_pending_actions & DETACH_TAB) { call_boss(detach_tab, NULL); }
             if (cocoa_pending_actions & PASTE) { call_boss(paste_from_clipboard, NULL); }
-            if (cocoa_pending_actions_wd) {
-                if (cocoa_pending_actions & NEW_OS_WINDOW_WITH_WD) { call_boss(new_os_window_with_wd, "s", cocoa_pending_actions_wd); }
-                if (cocoa_pending_actions & NEW_TAB_WITH_WD) { call_boss(new_tab_with_wd, "s", cocoa_pending_actions_wd); }
-                free(cocoa_pending_actions_wd);
-                cocoa_pending_actions_wd = NULL;
+            if (cocoa_pending_actions_data.wd) {
+                if (cocoa_pending_actions & NEW_OS_WINDOW_WITH_WD) { call_boss(new_os_window_with_wd, "s", cocoa_pending_actions_data.wd); }
+                if (cocoa_pending_actions & NEW_TAB_WITH_WD) { call_boss(new_tab_with_wd, "s", cocoa_pending_actions_data.wd); }
+                free(cocoa_pending_actions_data.wd);
+                cocoa_pending_actions_data.wd = NULL;
+            }
+            if (cocoa_pending_actions_data.open_files_count) {
+                for (unsigned cpa = 0; cpa < cocoa_pending_actions_data.open_files_count; cpa++) {
+                    if (cocoa_pending_actions_data.open_files[cpa]) {
+                        call_boss(open_file, "s", cocoa_pending_actions_data.open_files[cpa]);
+                        free(cocoa_pending_actions_data.open_files[cpa]);
+                        cocoa_pending_actions_data.open_files[cpa] = NULL;
+                    }
+                }
+                cocoa_pending_actions_data.open_files_count = 0;
             }
             cocoa_pending_actions = 0;
         }
@@ -997,7 +1037,13 @@ main_loop(ChildMonitor *self, PyObject *a UNUSED) {
     state_check_timer = add_main_loop_timer(1000, true, do_state_check, self, NULL);
     run_main_loop(process_global_state, self);
 #ifdef __APPLE__
-    if (cocoa_pending_actions_wd) { free(cocoa_pending_actions_wd); cocoa_pending_actions_wd = NULL; }
+    if (cocoa_pending_actions_data.wd) { free(cocoa_pending_actions_data.wd); cocoa_pending_actions_data.wd = NULL; }
+    if (cocoa_pending_actions_data.open_files) {
+        for (unsigned cpa = 0; cpa < cocoa_pending_actions_data.open_files_count; cpa++) {
+            if (cocoa_pending_actions_data.open_files[cpa]) free(cocoa_pending_actions_data.open_files[cpa]);
+        }
+        free(cocoa_pending_actions_data.open_files); cocoa_pending_actions_data.open_files = NULL;
+    }
 #endif
     if (PyErr_Occurred()) return NULL;
     Py_RETURN_NONE;
@@ -1096,19 +1142,6 @@ read_bytes(int fd, Screen *screen) {
     return true;
 }
 
-
-static inline void
-drain_fd(int fd) {
-    while(true) {
-        ssize_t len = read(fd, drain_buf, sizeof(drain_buf));
-        if (len < 0) {
-            if (errno == EINTR) continue;
-            break;
-        }
-        if (len > 0) continue;
-        break;
-    }
-}
 
 typedef struct { bool kill_signal, child_died; } SignalSet;
 
@@ -1467,7 +1500,7 @@ talk_loop(void *data) {
     ChildMonitor *self = (ChildMonitor*)data;
     set_thread_name("KittyPeerMon");
     if (!init_loop_data(&talk_data.loop_data)) { log_error("Failed to create wakeup fd for talk thread with error: %s", strerror(errno)); }
-    PollFD fds[PEER_LIMIT + 8] = {0};
+    PollFD fds[PEER_LIMIT + 8] = {{0}};
     size_t num_listen_fds = 0, num_peer_fds = 0;
 #define add_listener(which) \
     if (self->which > -1) { \

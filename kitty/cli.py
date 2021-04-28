@@ -16,7 +16,8 @@ from .conf.utils import resolve_config
 from .config import KeyAction
 from .constants import appname, defconf, is_macos, is_wayland, str_version
 from .options_stub import Options as OptionsStub
-from .typing import BadLineType, KeySpec, SequenceMap, TypedDict
+from .types import SingleKey
+from .typing import BadLineType, SequenceMap, TypedDict
 
 
 class OptionDict(TypedDict):
@@ -610,7 +611,7 @@ created after startup.
 --hold
 type=bool-set
 Remain open after child process exits. Note that this only affects the first
-window. You can quit by either using the close window shortcut or :kbd:`Ctrl+d`.
+window. You can quit by either using the close window shortcut or pressing any key.
 
 
 --single-instance -1
@@ -755,38 +756,33 @@ def parse_args(
 
 
 SYSTEM_CONF = '/etc/xdg/kitty/kitty.conf'
-ShortcutMap = Dict[Tuple[KeySpec, ...], KeyAction]
+ShortcutMap = Dict[Tuple[SingleKey, ...], KeyAction]
 
 
-def print_shortcut(key_sequence: Iterable[KeySpec], action: KeyAction) -> None:
-    if not getattr(print_shortcut, 'maps', None):
-        from kitty.keys import defines
-        v = vars(defines)
-        mmap = {m[len('GLFW_MOD_'):].lower(): x for m, x in v.items() if m.startswith('GLFW_MOD_')}
-        kmap = {k[len('GLFW_KEY_'):].lower(): x for k, x in v.items() if k.startswith('GLFW_KEY_')}
-        krmap = {v: k for k, v in kmap.items()}
-        setattr(print_shortcut, 'maps', (mmap, krmap))
-    mmap, krmap = getattr(print_shortcut, 'maps')
+def print_shortcut(key_sequence: Iterable[SingleKey], action: KeyAction) -> None:
+    from .fast_data_types import (
+        GLFW_MOD_ALT, GLFW_MOD_CAPS_LOCK, GLFW_MOD_CONTROL, GLFW_MOD_HYPER,
+        GLFW_MOD_META, GLFW_MOD_NUM_LOCK, GLFW_MOD_SHIFT, GLFW_MOD_SUPER,
+        glfw_get_key_name
+    )
+    modmap = {'shift': GLFW_MOD_SHIFT, 'alt': GLFW_MOD_ALT, 'ctrl': GLFW_MOD_CONTROL, ('cmd' if is_macos else 'super'): GLFW_MOD_SUPER,
+              'hyper': GLFW_MOD_HYPER, 'meta': GLFW_MOD_META, 'num_lock': GLFW_MOD_NUM_LOCK, 'caps_lock': GLFW_MOD_CAPS_LOCK}
     keys = []
     for key_spec in key_sequence:
         names = []
         mods, is_native, key = key_spec
-        for name, val in mmap.items():
+        for name, val in modmap.items():
             if mods & val:
                 names.append(name)
         if key:
-            if is_native:
-                from .fast_data_types import GLFW_KEY_UNKNOWN, glfw_get_key_name
-                kn = glfw_get_key_name(GLFW_KEY_UNKNOWN, key) or 'Unknown key'
-                names.append(kn)
-            else:
-                names.append(krmap[key])
+            kname = glfw_get_key_name(0, key) if is_native else glfw_get_key_name(key, 0)
+            names.append(kname or f'{key}')
         keys.append('+'.join(names))
 
     print('\t', ' > '.join(keys), action)
 
 
-def print_shortcut_changes(defns: ShortcutMap, text: str, changes: Set[Tuple[KeySpec, ...]]) -> None:
+def print_shortcut_changes(defns: ShortcutMap, text: str, changes: Set[Tuple[SingleKey, ...]]) -> None:
     if changes:
         print(title(text))
 
@@ -804,7 +800,7 @@ def compare_keymaps(final: ShortcutMap, initial: ShortcutMap) -> None:
 
 
 def flatten_sequence_map(m: SequenceMap) -> ShortcutMap:
-    ans: Dict[Tuple[KeySpec, ...], KeyAction] = {}
+    ans: Dict[Tuple[SingleKey, ...], KeyAction] = {}
     for key_spec, rest_map in m.items():
         for r, action in rest_map.items():
             ans[(key_spec,) + (r)] = action
@@ -857,4 +853,11 @@ def create_opts(args: CLIOptions, debug_config: bool = False, accumulate_bad_lin
         if not is_macos:
             print('Running under:', green('Wayland' if is_wayland(opts) else 'X11'))
         compare_opts(opts)
+    return opts
+
+
+def create_default_opts() -> OptionsStub:
+    from .config import load_config
+    config = tuple(resolve_config(SYSTEM_CONF, defconf, ()))
+    opts = load_config(*config)
     return opts

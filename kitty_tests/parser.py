@@ -100,10 +100,13 @@ class TestParser(BaseTest):
         s.cursor_back(5)
         pb('x\033[2@y', 'x', ('screen_insert_characters', 2), 'y')
         self.ae(str(s.line(0)), 'xy bc')
-        pb('x\033[2;7@y', 'x', ('screen_insert_characters', 2), 'y')
+        pb('x\033[2;7@y', 'x', ('CSI code 0x40 has 2 > 1 parameters',), 'y')
+        pb('x\033[2;-7@y', 'x', ('CSI code 0x40 has 2 > 1 parameters',), 'y')
+        pb('x\033[-2@y', 'x', ('CSI code 0x40 is not allowed to have negative parameter (-2)',), 'y')
+        pb('x\033[2-3@y', 'x', ('CSI code can contain hyphens only at the start of numbers',), 'y')
         pb('x\033[@y', 'x', ('screen_insert_characters', 1), 'y')
         pb('x\033[345@y', 'x', ('screen_insert_characters', 345), 'y')
-        pb('x\033[345;@y', 'x', ('CSI code 0x40 has unsupported start modifier: 0x0 or end modifier: 0x3b',), 'y')
+        pb('x\033[345;@y', 'x', ('screen_insert_characters', 345), 'y')
         pb('\033[H', ('screen_cursor_position', 1, 1))
         self.ae(s.cursor.x, 0), self.ae(s.cursor.y, 0)
         pb('\033[4H', ('screen_cursor_position', 4, 1))
@@ -181,6 +184,9 @@ class TestParser(BaseTest):
         pb('\033[3 @', ('Shift left escape code not implemented',))
         pb('\033[3 A', ('Shift right escape code not implemented',))
         pb('\033[3;4 S', ('Select presentation directions escape code not implemented',))
+        pb('\033[1T', ('screen_reverse_scroll', 1))
+        pb('\033[T', ('screen_reverse_scroll', 1))
+        pb('\033[+T', ('screen_reverse_scroll_and_fill_from_scrollback', 1))
 
     def test_csi_code_rep(self):
         s = self.create_screen(8)
@@ -378,7 +384,7 @@ class TestParser(BaseTest):
                     k[p] = v.encode('ascii')
             for f in 'action delete_action transmission_type compressed'.split():
                 k.setdefault(f, b'\0')
-            for f in ('format more id data_sz data_offset width height x_offset y_offset data_height data_width'
+            for f in ('format more id data_sz data_offset width height x_offset y_offset data_height data_width cursor_movement'
                       ' num_cells num_lines cell_x_offset cell_y_offset z_index placement_id image_number quiet').split():
                 k.setdefault(f, 0)
             p = k.pop('payload', '').encode('utf-8')

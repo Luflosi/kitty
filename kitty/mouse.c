@@ -358,6 +358,7 @@ handle_mouse_movement_in_kitty(Window *w, int button, bool mouse_cell_changed) {
 }
 
 HANDLER(handle_move_event) {
+    modifiers &= ~GLFW_LOCK_MASK;
     unsigned int x = 0, y = 0;
     if (OPT(focus_follows_mouse)) {
         Tab *t = global_state.callback_os_window->tabs + global_state.callback_os_window->active_tab;
@@ -421,6 +422,7 @@ clear_click_queue(Window *w) {
 }
 
 HANDLER(add_click) {
+    modifiers &= ~GLFW_LOCK_MASK;
     ClickQueue *q = &w->click_queue;
     if (q->length == CLICK_QUEUE_SZ) { memmove(q->clicks, q->clicks + 1, sizeof(Click) * (CLICK_QUEUE_SZ - 1)); q->length--; }
     monotonic_t now = monotonic();
@@ -477,6 +479,7 @@ handle_button_event_in_kitty(Window *w, int button, int modifiers, bool is_relea
 }
 
 HANDLER(handle_button_event) {
+    modifiers &= ~GLFW_LOCK_MASK;
     Tab *t = global_state.callback_os_window->tabs + global_state.callback_os_window->active_tab;
     bool is_release = !global_state.callback_os_window->mouse_button_pressed[button];
     if (window_idx != t->active_window && !is_release) {
@@ -506,6 +509,7 @@ currently_pressed_button(void) {
 }
 
 HANDLER(handle_event) {
+    modifiers &= ~GLFW_LOCK_MASK;
     if (button == -1) {
         button = currently_pressed_button();
         handle_move_event(w, button, modifiers, window_idx);
@@ -516,8 +520,12 @@ HANDLER(handle_event) {
 
 static inline void
 handle_tab_bar_mouse(int button, int UNUSED modifiers) {
+    static monotonic_t last_click_at = 0;
     if (button != GLFW_MOUSE_BUTTON_LEFT || !global_state.callback_os_window->mouse_button_pressed[button]) return;
-    call_boss(activate_tab_at, "Kd", global_state.callback_os_window->id, global_state.callback_os_window->mouse_x);
+    monotonic_t now = monotonic();
+    bool is_double = now - last_click_at <= OPT(click_interval);
+    last_click_at = is_double ? 0 : now;
+    call_boss(activate_tab_at, "KdO", global_state.callback_os_window->id, global_state.callback_os_window->mouse_x, is_double ? Py_True : Py_False);
 }
 
 static inline bool
@@ -718,7 +726,6 @@ scroll_event(double UNUSED xoffset, double yoffset, int flags, int modifiers) {
     assert(test == s);
 
     screen->pending_scroll_pixels = pixels - s * cell_height;
-
     if (s == 0) return;
     bool upwards = s > 0;
     if (screen->modes.mouse_tracking_mode) {

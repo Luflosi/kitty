@@ -55,7 +55,7 @@ def wayland_protocol_file_name(base: str, ext: str = 'c') -> str:
     return 'wayland-{}-client-protocol.{}'.format(base, ext)
 
 
-def init_env(env: Env, pkg_config: Callable, at_least_version: Callable, test_compile: Callable, module: str = 'x11') -> Env:
+def init_env(env: Env, pkg_config: Callable, pkg_version: Callable, at_least_version: Callable, test_compile: Callable, module: str = 'x11') -> Env:
     ans = env.copy()
     ans.cflags.append('-fPIC')
     ans.cppflags.append('-D_GLFW_' + module.upper())
@@ -76,7 +76,11 @@ def init_env(env: Env, pkg_config: Callable, at_least_version: Callable, test_co
         ans.ldpaths.extend('-pthread -lm'.split())
         if not is_openbsd:
             ans.ldpaths.extend('-lrt -ldl'.split())
-        at_least_version('xkbcommon', 0, 5)
+        major, minor = pkg_version('xkbcommon')
+        if (major, minor) < (0, 5):
+            raise SystemExit('libxkbcommon >= 0.5 required')
+        if major < 1:
+            ans.cflags.append('-DXKB_HAS_NO_UTF32')
 
     if module == 'x11':
         for dep in 'x11 xrandr xinerama xcursor xkbcommon xkbcommon-x11 x11-xcb dbus-1'.split():
@@ -84,7 +88,7 @@ def init_env(env: Env, pkg_config: Callable, at_least_version: Callable, test_co
             ans.ldpaths.extend(pkg_config(dep, '--libs'))
 
     elif module == 'cocoa':
-        for f_ in 'Cocoa IOKit CoreFoundation CoreVideo'.split():
+        for f_ in 'Cocoa Carbon IOKit CoreFoundation CoreVideo'.split():
             ans.ldpaths.extend(('-framework', f_))
 
     elif module == 'wayland':
@@ -174,13 +178,12 @@ class Function:
         )
 
     def load(self) -> str:
-        ans = '*(void **) (&{name}_impl) = dlsym(handle, "{name}");'.format(
-            name=self.name
-        )
+        ans = f'*(void **) (&{self.name}_impl) = dlsym(handle, "{self.name}");'
+        ans += f'\n    if ({self.name}_impl == NULL) '
         if self.check_fail:
-            ans += '\n    if ({name}_impl == NULL) fail("Failed to load glfw function {name} with error: %s", dlerror());'.format(
-                name=self.name
-            )
+            ans += f'fail("Failed to load glfw function {self.name} with error: %s", dlerror());'
+        else:
+            ans += 'dlerror(); // clear error indicator'
         return ans
 
 
@@ -202,10 +205,11 @@ def generate_wrappers(glfw_header: str) -> None:
     void* glfwGetNSGLContext(GLFWwindow *window)
     uint32_t glfwGetCocoaMonitor(GLFWmonitor* monitor)
     GLFWcocoatextinputfilterfun glfwSetCocoaTextInputFilter(GLFWwindow* window, GLFWcocoatextinputfilterfun callback)
+    GLFWhandlefileopen glfwSetCocoaFileOpenCallback(GLFWhandlefileopen callback)
     GLFWcocoatogglefullscreenfun glfwSetCocoaToggleFullscreenIntercept(GLFWwindow *window, GLFWcocoatogglefullscreenfun callback)
     GLFWapplicationshouldhandlereopenfun glfwSetApplicationShouldHandleReopen(GLFWapplicationshouldhandlereopenfun callback)
     GLFWapplicationwillfinishlaunchingfun glfwSetApplicationWillFinishLaunching(GLFWapplicationwillfinishlaunchingfun callback)
-    void glfwGetCocoaKeyEquivalent(int glfw_key, int glfw_mods, char **cocoa_key, int* cocoa_mods)
+    uint32_t glfwGetCocoaKeyEquivalent(uint32_t glfw_key, int glfw_mods, int* cocoa_mods)
     void glfwCocoaRequestRenderFrame(GLFWwindow *w, GLFWcocoarenderframefun callback)
     void* glfwGetX11Display(void)
     int32_t glfwGetX11Window(GLFWwindow* window)
@@ -213,6 +217,7 @@ def generate_wrappers(glfw_header: str) -> None:
     const char* glfwGetPrimarySelectionString(GLFWwindow* window, void)
     int glfwGetNativeKeyForName(const char* key_name, int case_sensitive)
     void glfwRequestWaylandFrameEvent(GLFWwindow *handle, unsigned long long id, GLFWwaylandframecallbackfunc callback)
+    bool glfwWaylandSetTitlebarColor(GLFWwindow *handle, uint32_t color, bool use_system_color)
     unsigned long long glfwDBusUserNotify(const char *app_name, const char* icon, const char *summary, const char *body, \
 const char *action_text, int32_t timeout, GLFWDBusnotificationcreatedfun callback, void *data)
     void glfwDBusSetUserNotificationHandler(GLFWDBusnotificationactivatedfun handler)
@@ -243,6 +248,7 @@ const char *action_text, int32_t timeout, GLFWDBusnotificationcreatedfun callbac
 
 typedef int (* GLFWcocoatextinputfilterfun)(int,int,unsigned int,unsigned long);
 typedef bool (* GLFWapplicationshouldhandlereopenfun)(int);
+typedef bool (* GLFWhandlefileopen)(const char*);
 typedef void (* GLFWapplicationwillfinishlaunchingfun)(void);
 typedef bool (* GLFWcocoatogglefullscreenfun)(GLFWwindow*);
 typedef void (* GLFWcocoarenderframefun)(GLFWwindow*);

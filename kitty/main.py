@@ -7,7 +7,7 @@ import os
 import shutil
 import sys
 from contextlib import contextmanager, suppress
-from typing import Generator, List, Mapping, Optional, Sequence, Tuple
+from typing import Dict, Generator, List, Optional, Sequence
 
 from .borders import load_borders_program
 from .boss import Boss
@@ -18,20 +18,21 @@ from .conf.utils import BadLine
 from .config import cached_values_for
 from .constants import (
     appname, beam_cursor_data_file, config_dir, glfw_path, is_macos,
-    is_wayland, kitty_exe, logo_data_file, running_in_kitty
+    is_wayland, kitty_exe, logo_png_file, running_in_kitty
 )
 from .fast_data_types import (
-    GLFW_IBEAM_CURSOR, create_os_window, free_font_data, glfw_init,
-    glfw_terminate, load_png_data, set_custom_cursor, set_default_window_icon,
-    set_options
+    GLFW_IBEAM_CURSOR, GLFW_MOD_ALT, GLFW_MOD_SHIFT, create_os_window,
+    free_font_data, glfw_init, glfw_terminate, load_png_data,
+    set_custom_cursor, set_default_window_icon, set_options
 )
 from .fonts.box_drawing import set_scale
 from .fonts.render import set_font_family
 from .options_stub import Options as OptionsStub
 from .os_window_size import initial_window_size_func
 from .session import get_os_window_sizing_data
+from .types import SingleKey
 from .utils import (
-    detach, expandvars, log_error, read_shell_environment, single_instance,
+    detach, expandvars, log_error, single_instance,
     startup_notification_handler, unix_socket_paths
 )
 from .window import load_shader_programs
@@ -92,59 +93,56 @@ def load_all_shaders(semi_transparent: bool = False) -> None:
     load_borders_program()
 
 
-def init_glfw_module(glfw_module: str, debug_keyboard: bool = False) -> None:
-    if not glfw_init(glfw_path(glfw_module), debug_keyboard):
+def init_glfw_module(glfw_module: str, debug_keyboard: bool = False, debug_rendering: bool = False) -> None:
+    if not glfw_init(glfw_path(glfw_module), debug_keyboard, debug_rendering):
         raise SystemExit('GLFW initialization failed')
 
 
-def init_glfw(opts: OptionsStub, debug_keyboard: bool = False) -> str:
+def init_glfw(opts: OptionsStub, debug_keyboard: bool = False, debug_rendering: bool = False) -> str:
     glfw_module = 'cocoa' if is_macos else ('wayland' if is_wayland(opts) else 'x11')
-    init_glfw_module(glfw_module, debug_keyboard)
+    init_glfw_module(glfw_module, debug_keyboard, debug_rendering)
     return glfw_module
 
 
-def get_new_os_window_trigger(opts: OptionsStub) -> Optional[Tuple[int, bool, int]]:
-    new_os_window_trigger = None
-    if is_macos:
-        new_os_window_shortcuts = []
-        for k, v in opts.keymap.items():
-            if v.func == 'new_os_window':
-                new_os_window_shortcuts.append(k)
-        if new_os_window_shortcuts:
-            from .fast_data_types import cocoa_set_new_window_trigger
-            # Reverse list so that later defined keyboard shortcuts take priority over earlier defined ones
-            for candidate in reversed(new_os_window_shortcuts):
-                if cocoa_set_new_window_trigger(candidate[0], candidate[2]):
-                    new_os_window_trigger = candidate
-                    break
-    return new_os_window_trigger
+def get_macos_shortcut_for(opts: OptionsStub, function: str = 'new_os_window') -> Optional[SingleKey]:
+    ans = None
+    candidates = []
+    for k, v in opts.keymap.items():
+        if v.func == function:
+            candidates.append(k)
+    if candidates:
+        from .fast_data_types import cocoa_set_global_shortcut
+        alt_mods = GLFW_MOD_ALT, GLFW_MOD_ALT | GLFW_MOD_SHIFT
+        # Reverse list so that later defined keyboard shortcuts take priority over earlier defined ones
+        for candidate in reversed(candidates):
+            if candidate.mods in alt_mods:
+                # Option based shortcuts dont work in the global menubar,
+                # presumably because Apple reserves them for IME, see
+                # https://github.com/kovidgoyal/kitty/issues/3515
+                continue
+            if cocoa_set_global_shortcut(function, candidate[0], candidate[2]):
+                ans = candidate
+                break
+    return ans
 
 
-def get_paste_from_clipboard_trigger(opts: OptionsStub) -> Optional[Tuple[int, bool, int]]:
-    paste_from_clipboard_trigger = None
-    if is_macos:
-        paste_from_clipboard_shortcuts = []
-        for k, v in opts.keymap.items():
-            if v.func == 'paste_from_clipboard':
-                paste_from_clipboard_shortcuts.append(k)
-        if paste_from_clipboard_shortcuts:
-            from .fast_data_types import cocoa_set_paste_from_clipboard_trigger
-            # Reverse list so that later defined keyboard shortcuts take priority over earlier defined ones
-            for candidate in reversed(paste_from_clipboard_shortcuts):
-                if cocoa_set_paste_from_clipboard_trigger(candidate[0], candidate[2]):
-                    paste_from_clipboard_trigger = candidate
-                    break
-    return paste_from_clipboard_trigger
+def set_x11_window_icon() -> None:
+    # max icon size on X11 64bits is 128x128
+    path, ext = os.path.splitext(logo_png_file)
+    set_default_window_icon(path + '-128' + ext)
 
 
 def _run_app(opts: OptionsStub, args: CLIOptions, bad_lines: Sequence[BadLine] = ()) -> None:
-    new_os_window_trigger = get_new_os_window_trigger(opts)
-    paste_from_clipboard_trigger = get_paste_from_clipboard_trigger(opts)
+    global_shortcuts: Dict[str, SingleKey] = {}
+    if is_macos:
+        for ac in ('new_os_window', 'close_os_window', 'close_tab', 'edit_config_file', 'previous_tab', 'next_tab', 'new_tab', 'paste_from_clipboard'):
+            val = get_macos_shortcut_for(opts, ac)
+            if val is not None:
+                global_shortcuts[ac] = val
     if is_macos and opts.macos_custom_beam_cursor:
         set_custom_ibeam_cursor()
     if not is_wayland() and not is_macos:  # no window icons on wayland
-        with open(logo_data_file, 'rb') as f:
-            set_default_window_icon(f.read(), 256, 256)
+        set_x11_window_icon()
     load_shader_programs.use_selection_fg = opts.selection_foreground is not None
     with cached_values_for(run_app.cached_values_name) as cached_values:
         with startup_notification_handler(extra_callback=run_app.first_window_callback) as pre_show_callback:
@@ -153,7 +151,7 @@ def _run_app(opts: OptionsStub, args: CLIOptions, bad_lines: Sequence[BadLine] =
                     pre_show_callback,
                     args.title or appname, args.name or args.cls or appname,
                     args.cls or appname, load_all_shaders)
-        boss = Boss(opts, args, cached_values, new_os_window_trigger, paste_from_clipboard_trigger)
+        boss = Boss(opts, args, cached_values, global_shortcuts)
         boss.start(window_id)
         if bad_lines:
             boss.show_bad_config_lines(bad_lines)
@@ -232,24 +230,6 @@ def macos_cmdline(argv_args: List[str]) -> List[str]:
     return ans
 
 
-def get_editor_from_env(shell_env: Mapping[str, str]) -> Optional[str]:
-    for var in ('VISUAL', 'EDITOR'):
-        editor = shell_env.get(var)
-        if editor:
-            if 'PATH' in shell_env:
-                import shlex
-                editor_cmd = shlex.split(editor)
-                if not os.path.isabs(editor_cmd[0]):
-                    q = shutil.which(editor_cmd[0], path=shell_env['PATH'])
-                    if q:
-                        editor_cmd[0] = q
-                        editor = ' '.join(map(shlex.quote, editor_cmd))
-                    else:
-                        editor = None
-            if editor:
-                return editor
-
-
 def expand_listen_on(listen_on: str, from_config_file: bool) -> str:
     listen_on = expandvars(listen_on)
     if '{kitty_pid}' not in listen_on and from_config_file:
@@ -267,15 +247,6 @@ def expand_listen_on(listen_on: str, from_config_file: bool) -> str:
 
 
 def setup_environment(opts: OptionsStub, cli_opts: CLIOptions) -> None:
-    if opts.editor == '.':
-        editor = get_editor_from_env(os.environ)
-        if not editor:
-            shell_env = read_shell_environment(opts)
-            editor = get_editor_from_env(shell_env)
-        if editor:
-            os.environ['EDITOR'] = editor
-    else:
-        os.environ['EDITOR'] = opts.editor
     from_config_file = False
     if not cli_opts.listen_on and opts.listen_on.startswith('unix:'):
         cli_opts.listen_on = opts.listen_on
@@ -335,6 +306,9 @@ def _main() -> None:
         create_opts(cli_opts, debug_config=True)
         return
     if cli_opts.detach:
+        if cli_opts.session == '-':
+            from .session import PreReadSession
+            cli_opts.session = PreReadSession(sys.stdin.read())
         detach()
     if cli_opts.replay_commands:
         from kitty.client import main as client_main
@@ -347,7 +321,7 @@ def _main() -> None:
             return
     bad_lines: List[BadLine] = []
     opts = create_opts(cli_opts, accumulate_bad_lines=bad_lines)
-    init_glfw(opts, cli_opts.debug_keyboard)
+    init_glfw(opts, cli_opts.debug_keyboard, cli_opts.debug_rendering)
     setup_environment(opts, cli_opts)
     try:
         with setup_profiling(cli_opts):

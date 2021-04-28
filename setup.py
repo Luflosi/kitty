@@ -48,7 +48,11 @@ version = tuple(
 _plat = sys.platform.lower()
 is_macos = 'darwin' in _plat
 is_openbsd = 'openbsd' in _plat
-is_arm = platform.processor() == 'arm'
+is_freebsd = 'freebsd' in _plat
+is_netbsd = 'netbsd' in _plat
+is_dragonflybsd = 'dragonfly' in _plat
+is_bsd = is_freebsd or is_netbsd or is_dragonflybsd or is_openbsd
+is_arm = platform.processor() == 'arm' or platform.machine() == 'arm64'
 Env = glfw.Env
 env = Env()
 PKGCONFIG = os.environ.get('PKGCONFIG_EXE', 'pkg-config')
@@ -62,9 +66,9 @@ class Options(argparse.Namespace):
     prefix: str = './linux-package'
     incremental: bool = True
     profile: bool = False
-    for_freeze: bool = False
     libdir_name: str = 'lib'
     extra_logging: List[str] = []
+    extra_include_dirs: List[str] = []
     link_time_optimization: bool = 'KITTY_NO_LTO' not in os.environ
     update_check_interval: float = 24
     egl_library: Optional[str] = os.getenv('KITTY_EGL_LIBRARY')
@@ -111,6 +115,16 @@ def pkg_config(pkg: str, *args: str) -> List[str]:
         )
     except subprocess.CalledProcessError:
         raise SystemExit('The package {} was not found on your system'.format(error(pkg)))
+
+
+def pkg_version(package: str) -> Optional[Tuple[int, int]]:
+    ver = subprocess.check_output([
+        PKGCONFIG, package, '--modversion']).decode('utf-8').strip()
+    m = re.match(r'(\d+).(\d+)', ver)
+    if m is not None:
+        qmajor, qminor = map(int, m.groups())
+        return qmajor, qminor
+    return None
 
 
 def at_least_version(package: str, major: int, minor: int = 0) -> None:
@@ -245,7 +259,9 @@ def init_env(
     egl_library: Optional[str] = None,
     startup_notification_library: Optional[str] = None,
     canberra_library: Optional[str] = None,
-    extra_logging: Iterable[str] = ()
+    extra_logging: Iterable[str] = (),
+    extra_include_dirs: Iterable[str] = (),
+    ignore_compiler_warnings: bool = False
 ) -> Env:
     native_optimizations = native_optimizations and not sanitize and not debug
     if native_optimizations and is_macos and is_arm:
@@ -263,7 +279,7 @@ def init_env(
     if ccver >= (5, 0):
         df += ' -Og'
         float_conversion = '-Wfloat-conversion'
-    fortify_source = '-D_FORTIFY_SOURCE=2'
+    fortify_source = '' if sanitize and is_macos else '-D_FORTIFY_SOURCE=2'
     optimize = df if debug or sanitize else '-O3'
     sanitize_args = get_sanitize_args(cc, ccver) if sanitize else set()
     cppflags_ = os.environ.get(
@@ -272,19 +288,15 @@ def init_env(
     cppflags = shlex.split(cppflags_)
     for el in extra_logging:
         cppflags.append('-DDEBUG_{}'.format(el.upper().replace('-', '_')))
+    werror = '' if ignore_compiler_warnings else '-Werror'
+    std = '' if is_openbsd else '-std=c11'
+    sanitize_flag = ' '.join(sanitize_args)
+    march = '-march=native' if native_optimizations else ''
     cflags_ = os.environ.get(
         'OVERRIDE_CFLAGS', (
-            '-Wextra {} -Wno-missing-field-initializers -Wall -Wstrict-prototypes {}'
-            ' -pedantic-errors -Werror {} {} -fwrapv {} {} -pipe {} -fvisibility=hidden {}'
-        ).format(
-            float_conversion,
-            '' if is_openbsd else '-std=c11',
-            optimize,
-            ' '.join(sanitize_args),
-            stack_protector,
-            missing_braces,
-            '-march=native' if native_optimizations else '',
-            fortify_source
+            f'-Wextra {float_conversion} -Wno-missing-field-initializers -Wall -Wstrict-prototypes {std}'
+            f' -pedantic-errors {werror} {optimize} {sanitize_flag} -fwrapv {stack_protector} {missing_braces}'
+            f' -pipe {march} -fvisibility=hidden {fortify_source}'
         )
     )
     cflags = shlex.split(cflags_) + shlex.split(
@@ -329,6 +341,9 @@ def init_env(
 
     if desktop_libs != []:
         library_paths['kitty/desktop.c'] = desktop_libs
+
+    for path in extra_include_dirs:
+        cflags.append(f'-I{path}')
 
     return Env(cc, cppflags, cflags, ldflags, library_paths, ccver=ccver)
 
@@ -545,6 +560,7 @@ class CompilationDatabase:
         queue.append(Command(desc, cmd, is_newer_func, on_success or no_op, key, keyfile))
 
     def build_all(self) -> None:
+
         def sort_key(compile_cmd: Command) -> int:
             if compile_cmd.keyfile:
                 return os.path.getsize(compile_cmd.keyfile)
@@ -650,7 +666,11 @@ def compile_c_extension(
 def find_c_files() -> Tuple[List[str], List[str]]:
     ans, headers = [], []
     d = 'kitty'
-    exclude = {'fontconfig.c', 'freetype.c', 'desktop.c'} if is_macos else {'core_text.m', 'cocoa_window.m', 'macos_process_info.c'}
+    exclude = {
+        'fontconfig.c', 'freetype.c', 'desktop.c', 'freetype_render_ui_text.c'
+    } if is_macos else {
+        'core_text.m', 'cocoa_window.m', 'macos_process_info.c'
+    }
     for x in sorted(os.listdir(d)):
         ext = os.path.splitext(x)[1]
         if ext in ('.c', '.m') and os.path.basename(x) not in exclude:
@@ -665,7 +685,7 @@ def compile_glfw(compilation_database: CompilationDatabase) -> None:
     modules = 'cocoa' if is_macos else 'x11 wayland'
     for module in modules.split():
         try:
-            genv = glfw.init_env(env, pkg_config, at_least_version, test_compile, module)
+            genv = glfw.init_env(env, pkg_config, pkg_version, at_least_version, test_compile, module)
         except SystemExit as err:
             if module != 'wayland':
                 raise
@@ -731,12 +751,13 @@ def init_env_from_args(args: Options, native_optimizations: bool = False) -> Non
     env = init_env(
         args.debug, args.sanitize, native_optimizations, args.link_time_optimization, args.profile,
         args.egl_library, args.startup_notification_library, args.canberra_library,
-        args.extra_logging
+        args.extra_logging, args.extra_include_dirs, args.ignore_compiler_warnings
     )
 
 
-def build(args: Options, native_optimizations: bool = True) -> None:
-    init_env_from_args(args, native_optimizations)
+def build(args: Options, native_optimizations: bool = True, call_init: bool = True) -> None:
+    if call_init:
+        init_env_from_args(args, native_optimizations)
     sources, headers = find_c_files()
     compile_c_extension(
         kitty_env(), 'kitty/fast_data_types', args.compilation_database, sources, headers
@@ -783,6 +804,8 @@ def build_launcher(args: Options, launcher_dir: str = '.', bundle_type: str = 's
     cppflags += shlex.split(os.environ.get('CPPFLAGS', ''))
     cflags += shlex.split(os.environ.get('CFLAGS', ''))
     ldflags = shlex.split(os.environ.get('LDFLAGS', ''))
+    for path in args.extra_include_dirs:
+        cflags.append(f'-I{path}')
     if bundle_type == 'linux-freeze':
         ldflags += ['-Wl,-rpath,$ORIGIN/../lib']
     os.makedirs(launcher_dir, exist_ok=True)
@@ -870,7 +893,7 @@ Version=1.0
 Type=Application
 Name=kitty
 GenericName=Terminal emulator
-Comment=A fast, feature full, GPU based terminal emulator
+Comment=Fast, feature-rich, GPU based terminal
 TryExec=kitty
 Exec=kitty
 Icon=kitty
@@ -897,6 +920,24 @@ def macos_info_plist() -> bytes:
     def access(what: str, verb: str = 'would like to access') -> str:
         return f'A program running inside kitty {verb} {what}'
 
+    docs = [
+        {
+            'CFBundleTypeName': 'Terminal scripts',
+            'CFBundleTypeExtensions': ['command', 'sh', 'zsh', 'bash', 'fish', 'tool'],
+            'CFBundleTypeIconFile': appname + '.icns',
+            'CFBundleTypeRole': 'Editor',
+        },
+        {
+            'CFBundleTypeName': 'Folders',
+            'CFBundleTypeOSTypes': ['fold'],
+            'CFBundleTypeRole': 'Editor',
+        },
+        {
+            'LSItemContentTypes': ['public.unix-executable'],
+            'CFBundleTypeRole': 'Shell',
+        },
+    ]
+
     pl = dict(
         # see https://github.com/kovidgoyal/kitty/issues/1233
         CFBundleDevelopmentRegion='English',
@@ -910,6 +951,7 @@ def macos_info_plist() -> bytes:
         CFBundlePackageType='APPL',
         CFBundleSignature='????',
         CFBundleExecutable=appname,
+        CFBundleDocumentTypes=docs,
         LSMinimumSystemVersion='10.12.0',
         LSRequiresNativeExecution=True,
         NSAppleScriptEnabled=False,
@@ -1008,6 +1050,7 @@ def create_macos_bundle_gunk(dest: str) -> None:
 
 def package(args: Options, bundle_type: str) -> None:
     ddir = args.prefix
+    for_freeze = bundle_type.endswith('-freeze')
     if bundle_type == 'linux-freeze':
         args.libdir_name = 'lib'
     libdir = os.path.join(ddir, args.libdir_name.strip('/'), 'kitty')
@@ -1015,28 +1058,34 @@ def package(args: Options, bundle_type: str) -> None:
         shutil.rmtree(libdir)
     launcher_dir = os.path.join(ddir, 'bin')
     safe_makedirs(launcher_dir)
-    build_launcher(args, launcher_dir, bundle_type)
+    if for_freeze:  # freeze launcher is built separately
+        args.compilation_database.build_all()
+    else:
+        build_launcher(args, launcher_dir, bundle_type)
     os.makedirs(os.path.join(libdir, 'logo'))
-    build_terminfo = runpy.run_path('build-terminfo', run_name='import_build')
+    build_terminfo = runpy.run_path('build-terminfo', run_name='import_build')  # type: ignore
     for x in (libdir, os.path.join(ddir, 'share')):
         odir = os.path.join(x, 'terminfo')
         safe_makedirs(odir)
         build_terminfo['compile_terminfo'](odir)
     shutil.copy2('__main__.py', libdir)
-    shutil.copy2('logo/kitty.rgba', os.path.join(libdir, 'logo'))
+    shutil.copy2('logo/kitty-128.png', os.path.join(libdir, 'logo'))
     shutil.copy2('logo/kitty.png', os.path.join(libdir, 'logo'))
     shutil.copy2('logo/beam-cursor.png', os.path.join(libdir, 'logo'))
     shutil.copy2('logo/beam-cursor@2x.png', os.path.join(libdir, 'logo'))
+    allowed_extensions = frozenset('py glsl so'.split())
 
     def src_ignore(parent: str, entries: Iterable[str]) -> List[str]:
         return [
             x for x in entries
             if '.' in x and x.rpartition('.')[2] not in
-            ('py', 'so', 'glsl')
+            allowed_extensions
         ]
 
     shutil.copytree('kitty', os.path.join(libdir, 'kitty'), ignore=src_ignore)
     shutil.copytree('kittens', os.path.join(libdir, 'kittens'), ignore=src_ignore)
+    if for_freeze:
+        shutil.copytree('kitty_tests', os.path.join(libdir, 'kitty_tests'))
     if args.update_check_interval != 24.0:
         with open(os.path.join(libdir, 'kitty/config_data.py'), 'r+', encoding='utf-8') as f:
             raw = f.read()
@@ -1092,7 +1141,7 @@ def option_parser() -> argparse.ArgumentParser:  # {{{
         'action',
         nargs='?',
         default=Options.action,
-        choices='build test linux-package app kitty.app linux-freeze macos-freeze build-launcher clean export-ci-bundles'.split(),
+        choices='build test linux-package app kitty.app linux-freeze macos-freeze build-launcher build-frozen-launcher clean export-ci-bundles'.split(),
         help='Action to perform (default is build)'
     )
     p.add_argument(
@@ -1132,12 +1181,6 @@ def option_parser() -> argparse.ArgumentParser:  # {{{
         help='Use the -pg compile flag to add profiling information'
     )
     p.add_argument(
-        '--for-freeze',
-        default=Options.for_freeze,
-        action='store_true',
-        help='Internal use'
-    )
-    p.add_argument(
         '--libdir-name',
         default=Options.libdir_name,
         help='The name of the directory inside --prefix in which to store compiled files. Defaults to "lib"'
@@ -1149,6 +1192,12 @@ def option_parser() -> argparse.ArgumentParser:  # {{{
         choices=('event-loop',),
         help='Turn on extra logging for debugging in this build. Can be specified multiple times, to turn'
         ' on different types of logging.'
+    )
+    p.add_argument(
+        '--extra-include-dirs',
+        action='append',
+        default=Options.extra_include_dirs,
+        help='Extra include directories to use while compiling'
     )
     p.add_argument(
         '--update-check-interval',
@@ -1185,6 +1234,11 @@ def option_parser() -> argparse.ArgumentParser:  # {{{
         action='store_false',
         help='Turn off Link Time Optimization (LTO).'
     )
+    p.add_argument(
+        '--ignore-compiler-warnings',
+        default=False, action='store_true',
+        help='Ignore any warnings from the compiler while building'
+    )
     return p
 # }}}
 
@@ -1215,6 +1269,10 @@ def main() -> None:
         elif args.action == 'build-launcher':
             init_env_from_args(args, False)
             build_launcher(args, launcher_dir=launcher_dir)
+        elif args.action == 'build-frozen-launcher':
+            init_env_from_args(args, False)
+            bundle_type = ('macos' if is_macos else 'linux') + '-freeze'
+            build_launcher(args, launcher_dir=os.path.join(args.prefix, 'bin'), bundle_type=bundle_type)
         elif args.action == 'linux-package':
             build(args, native_optimizations=False)
             package(args, bundle_type='linux-package')
@@ -1222,8 +1280,9 @@ def main() -> None:
             build(args, native_optimizations=False)
             package(args, bundle_type='linux-freeze')
         elif args.action == 'macos-freeze':
-            build(args, native_optimizations=False)
+            init_env_from_args(args, native_optimizations=False)
             build_launcher(args, launcher_dir=launcher_dir)
+            build(args, native_optimizations=False, call_init=False)
             package(args, bundle_type='macos-freeze')
         elif args.action in ('app', 'kitty.app'):
             args.prefix = 'kitty.app'

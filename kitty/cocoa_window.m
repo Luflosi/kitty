@@ -7,6 +7,7 @@
 
 
 #include "state.h"
+#include "cleanup.h"
 #include "monotonic.h"
 #include <Cocoa/Cocoa.h>
 #ifndef KITTY_USE_DEPRECATED_MACOS_NOTIFICATION_API
@@ -75,28 +76,26 @@ find_app_name(void) {
 + (GlobalMenuTarget *) shared_instance;
 @end
 
+#define PENDING(selector, which) - (void)selector:(id)sender { (void)sender; set_cocoa_pending_action(which, NULL); }
+
 @implementation GlobalMenuTarget
 
-- (void)show_preferences:(id)sender {
-    (void)sender;
-    set_cocoa_pending_action(PREFERENCES_WINDOW, NULL);
-}
-
-- (void)new_os_window:(id)sender {
-    (void)sender;
-    set_cocoa_pending_action(NEW_OS_WINDOW, NULL);
-}
-
-- (void)paste:(id)sender {
-    (void)sender;
-    set_cocoa_pending_action(PASTE, NULL);
-}
+PENDING(edit_config_file, PREFERENCES_WINDOW)
+PENDING(new_os_window, NEW_OS_WINDOW)
+PENDING(detach_tab, DETACH_TAB)
+PENDING(close_os_window, CLOSE_OS_WINDOW)
+PENDING(close_tab, CLOSE_TAB)
+PENDING(new_tab, NEW_TAB)
+PENDING(next_tab, NEXT_TAB)
+PENDING(previous_tab, PREVIOUS_TAB)
+PENDING(paste_from_clipboard, PASTE)
 
 - (void)open_kitty_website_url:(id)sender {
     (void)sender;
     [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://sw.kovidgoyal.net/kitty/"]];
 }
 
+#undef PENDING
 
 + (GlobalMenuTarget *) shared_instance
 {
@@ -111,30 +110,32 @@ find_app_name(void) {
 
 @end
 
-static char* new_window_key = NULL;
-static NSEventModifierFlags new_window_mods = 0;
-static char* paste_key = NULL;
-static NSEventModifierFlags paste_mods = 0;
+typedef struct {
+    char key[32];
+    NSEventModifierFlags mods;
+} GlobalShortcut;
+typedef struct {
+    GlobalShortcut new_os_window, close_os_window, close_tab, edit_config_file;
+    GlobalShortcut previous_tab, next_tab, new_tab, paste_from_clipboard;
+} GlobalShortcuts;
+static GlobalShortcuts global_shortcuts;
 
 static PyObject*
-cocoa_set_new_window_trigger(PyObject *self UNUSED, PyObject *args) {
-    int mods, key;
-    if (!PyArg_ParseTuple(args, "ii", &mods, &key)) return NULL;
-    int nwm;
-    get_cocoa_key_equivalent(key, mods, &new_window_key, &nwm);
-    new_window_mods = nwm;
-    if (new_window_key) Py_RETURN_TRUE;
-    Py_RETURN_FALSE;
-}
-
-static PyObject*
-cocoa_set_paste_from_clipboard_trigger(PyObject *self UNUSED, PyObject *args) {
-    int mods, key;
-    if (!PyArg_ParseTuple(args, "ii", &mods, &key)) return NULL;
-    int m;
-    get_cocoa_key_equivalent(key, mods, &paste_key, &m);
-    paste_mods = m;
-    if (paste_key) Py_RETURN_TRUE;
+cocoa_set_global_shortcut(PyObject *self UNUSED, PyObject *args) {
+    int mods;
+    unsigned int key;
+    const char *name;
+    if (!PyArg_ParseTuple(args, "siI", &name, &mods, &key)) return NULL;
+    GlobalShortcut *gs = NULL;
+#define Q(x) if (strcmp(name, #x) == 0) gs = &global_shortcuts.x
+    Q(new_os_window); else Q(close_os_window); else Q(close_tab); else Q(edit_config_file);
+    else Q(new_tab); else Q(next_tab); else Q(previous_tab); else Q(paste_from_clipboard);
+#undef Q
+    if (gs == NULL) { PyErr_SetString(PyExc_KeyError, "Unknown shortcut name"); return NULL; }
+    int cocoa_mods;
+    get_cocoa_key_equivalent(key, mods, gs->key, 32, &cocoa_mods);
+    gs->mods = cocoa_mods;
+    if (gs->key[0]) Py_RETURN_TRUE;
     Py_RETURN_FALSE;
 }
 
@@ -356,6 +357,12 @@ cocoa_create_global_menu(void) {
     GlobalMenuTarget *global_menu_target = [GlobalMenuTarget shared_instance];
     [NSApp setMainMenu:bar];
 
+#define MENU_ITEM(menu, title, name) { \
+    NSMenuItem *__mi = [menu addItemWithTitle:title action:@selector(name:) keyEquivalent:@(global_shortcuts.name.key)]; \
+    [__mi setKeyEquivalentModifierMask:global_shortcuts.name.mods]; \
+    [__mi setTarget:global_menu_target]; \
+}
+
     NSMenuItem* appMenuItem =
         [bar addItemWithTitle:@""
                        action:NULL
@@ -367,18 +374,15 @@ cocoa_create_global_menu(void) {
                        action:@selector(orderFrontStandardAboutPanel:)
                 keyEquivalent:@""];
     [appMenu addItem:[NSMenuItem separatorItem]];
-    [[appMenu addItemWithTitle:@"Preferences..."
-                       action:@selector(show_preferences:)
-                keyEquivalent:@","]
-                    setTarget:global_menu_target];
+    MENU_ITEM(appMenu, @"Preferences…", edit_config_file);
 
     [appMenu addItem:[NSMenuItem separatorItem]];
+
     NSMenu* servicesMenu = [[NSMenu alloc] init];
     [NSApp setServicesMenu:servicesMenu];
     [[appMenu addItemWithTitle:@"Services"
                         action:NULL
-                 keyEquivalent:@""]
-                    setSubmenu:servicesMenu];
+                 keyEquivalent:@""] setSubmenu:servicesMenu];
     [servicesMenu release];
 
     [appMenu addItem:[NSMenuItem separatorItem]];
@@ -395,6 +399,12 @@ cocoa_create_global_menu(void) {
                 keyEquivalent:@""];
     [appMenu addItem:[NSMenuItem separatorItem]];
 
+    [[appMenu addItemWithTitle:@"Secure Keyboard Entry"
+                        action:@selector(toggleSecureInput:)
+                 keyEquivalent:@"s"]
+        setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
+    [appMenu addItem:[NSMenuItem separatorItem]];
+
     [appMenu addItemWithTitle:[NSString stringWithFormat:@"Quit %@", app_name]
                        action:@selector(terminate:)
                 keyEquivalent:@"q"];
@@ -407,12 +417,7 @@ cocoa_create_global_menu(void) {
     NSMenu* fileMenu = [[NSMenu alloc] initWithTitle:@"File"];
     [fileMenuItem setSubmenu:fileMenu];
 
-    NSMenuItem* new_os_window_menu_item =
-        [fileMenu addItemWithTitle:@"New window"
-                           action:@selector(new_os_window:)
-                    keyEquivalent:new_window_key ? @(new_window_key) : @""];
-    [new_os_window_menu_item setKeyEquivalentModifierMask:new_window_mods];
-    [new_os_window_menu_item setTarget:global_menu_target];
+    MENU_ITEM(fileMenu, @"New window", new_os_window);
 
     [fileMenu release];
 
@@ -423,12 +428,7 @@ cocoa_create_global_menu(void) {
     NSMenu* editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
     [editMenuItem setSubmenu:editMenu];
 
-    NSMenuItem* paste_menu_item =
-        [editMenu addItemWithTitle:@"Paste"
-                            action:@selector(paste:)
-                     keyEquivalent:paste_key ? @(paste_key) : @""];
-    [paste_menu_item setKeyEquivalentModifierMask:paste_mods];
-    [paste_menu_item setTarget:global_menu_target];
+    MENU_ITEM(editMenu, @"Paste", paste_from_clipboard);
 
     [editMenu release];
 
@@ -442,6 +442,7 @@ cocoa_create_global_menu(void) {
                          action:@selector(toggleFullScreen:)
                   keyEquivalent:@"f"]
         setKeyEquivalentModifierMask:NSEventModifierFlagControl | NSEventModifierFlagCommand];
+
     [viewMenu release];
 
     NSMenuItem* windowMenuItem =
@@ -461,7 +462,17 @@ cocoa_create_global_menu(void) {
     [windowMenu addItemWithTitle:@"Bring All to Front"
                           action:@selector(arrangeInFront:)
                    keyEquivalent:@""];
-    [NSApp setWindowsMenu:windowMenu];
+
+    [windowMenu addItem:[NSMenuItem separatorItem]];
+    MENU_ITEM(windowMenu, @"New Tab", new_tab);
+    MENU_ITEM(windowMenu, @"Show Previous Tab", previous_tab);
+    MENU_ITEM(windowMenu, @"Show Next Tab", next_tab);
+    MENU_ITEM(windowMenu, @"Close Tab", close_tab);
+    MENU_ITEM(windowMenu, @"Close OS Window", close_os_window);
+    [[windowMenu addItemWithTitle:@"Move Tab to New Window"
+                           action:@selector(detach_tab:)
+                    keyEquivalent:@""] setTarget:global_menu_target];
+
     [windowMenu release];
 
     NSMenuItem* helpMenuItem =
@@ -486,6 +497,7 @@ cocoa_create_global_menu(void) {
 
 
     [NSApp setServicesProvider:[[[ServiceProvider alloc] init] autorelease]];
+#undef MENU_ITEM
 }
 
 void
@@ -651,11 +663,6 @@ cleanup() {
     notification_queue.capacity = 0;
 #endif
 
-    free(new_window_key);
-    new_window_key = NULL;
-    free(paste_key);
-    paste_key = NULL;
-
     } // autoreleasepool
 }
 
@@ -677,8 +684,7 @@ cocoa_system_beep(void) {
 
 static PyMethodDef module_methods[] = {
     {"cocoa_get_lang", (PyCFunction)cocoa_get_lang, METH_NOARGS, ""},
-    {"cocoa_set_new_window_trigger", (PyCFunction)cocoa_set_new_window_trigger, METH_VARARGS, ""},
-    {"cocoa_set_paste_from_clipboard_trigger", (PyCFunction)cocoa_set_paste_from_clipboard_trigger, METH_VARARGS, ""},
+    {"cocoa_set_global_shortcut", (PyCFunction)cocoa_set_global_shortcut, METH_VARARGS, ""},
     {"cocoa_send_notification", (PyCFunction)cocoa_send_notification, METH_VARARGS, ""},
     {"cocoa_set_notification_activated_callback", (PyCFunction)set_notification_activated_callback, METH_O, ""},
     {NULL, NULL, 0, NULL}        /* Sentinel */
@@ -686,10 +692,8 @@ static PyMethodDef module_methods[] = {
 
 bool
 init_cocoa(PyObject *module) {
+    memset(&global_shortcuts, 0, sizeof(global_shortcuts));
     if (PyModule_AddFunctions(module, module_methods) != 0) return false;
-    if (Py_AtExit(cleanup) != 0) {
-        PyErr_SetString(PyExc_RuntimeError, "Failed to register the cocoa_window at exit handler");
-        return false;
-    }
+    register_at_exit_cleanup_func(COCOA_CLEANUP_FUNC, cleanup);
     return true;
 }

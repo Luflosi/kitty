@@ -7,10 +7,10 @@ import os
 import pwd
 import sys
 from contextlib import suppress
-from functools import lru_cache
 from typing import NamedTuple, Optional, Set
 
 from .options_stub import Options
+from .types import run_once
 
 
 class Version(NamedTuple):
@@ -20,51 +20,27 @@ class Version(NamedTuple):
 
 
 appname: str = 'kitty'
-version: Version = Version(0, 19, 3)
+kitty_face = '🐱'
+version: Version = Version(0, 20, 2)
 str_version: str = '.'.join(map(str, version))
 _plat = sys.platform.lower()
 is_macos: bool = 'darwin' in _plat
-base = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False):
+    extensions_dir: str = getattr(sys, 'kitty_extensions_dir')
+    kitty_base_dir = os.path.dirname(extensions_dir)
+    if is_macos:
+        kitty_base_dir = os.path.dirname(os.path.dirname(kitty_base_dir))
+    kitty_base_dir = os.path.join(kitty_base_dir, 'kitty')
+else:
+    kitty_base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    extensions_dir = os.path.join(kitty_base_dir, 'kitty')
 
 
-class Edges(NamedTuple):
-    left: int = 0
-    top: int = 0
-    right: int = 0
-    bottom: int = 0
-
-
-class FloatEdges(NamedTuple):
-    left: float = 0
-    top: float = 0
-    right: float = 0
-    bottom: float = 0
-
-
-class ScreenGeometry(NamedTuple):
-    xstart: float
-    ystart: float
-    xnum: int
-    ynum: int
-    dx: float
-    dy: float
-
-
-class WindowGeometry(NamedTuple):
-    left: int
-    top: int
-    right: int
-    bottom: int
-    xnum: int
-    ynum: int
-    spaces: Edges = Edges()
-
-
-@lru_cache(maxsize=2)
+@run_once
 def kitty_exe() -> str:
     rpath = sys._xoptions.get('bundle_exe_dir')
     if not rpath:
-        items = os.environ.get('PATH', '').split(os.pathsep) + [os.path.join(base, 'launcher')]
+        items = os.environ.get('PATH', '').split(os.pathsep) + [os.path.join(kitty_base_dir, 'kitty', 'launcher')]
         seen: Set[str] = set()
         for candidate in filter(None, items):
             if candidate not in seen:
@@ -126,7 +102,7 @@ del _get_config_dir
 defconf = os.path.join(config_dir, 'kitty.conf')
 
 
-@lru_cache(maxsize=2)
+@run_once
 def cache_dir() -> str:
     if 'KITTY_CACHE_DIRECTORY' in os.environ:
         candidate = os.path.abspath(os.environ['KITTY_CACHE_DIRECTORY'])
@@ -146,11 +122,9 @@ def wakeup() -> None:
         b.child_monitor.wakeup()
 
 
-base_dir = os.path.dirname(base)
-terminfo_dir = os.path.join(base_dir, 'terminfo')
-logo_data_file = os.path.join(base_dir, 'logo', 'kitty.rgba')
-logo_png_file = os.path.join(base_dir, 'logo', 'kitty.png')
-beam_cursor_data_file = os.path.join(base_dir, 'logo', 'beam-cursor.png')
+terminfo_dir = os.path.join(kitty_base_dir, 'terminfo')
+logo_png_file = os.path.join(kitty_base_dir, 'logo', 'kitty.png')
+beam_cursor_data_file = os.path.join(kitty_base_dir, 'logo', 'beam-cursor.png')
 try:
     shell_path = pwd.getpwuid(os.geteuid()).pw_shell or '/bin/sh'
 except KeyError:
@@ -160,7 +134,8 @@ except KeyError:
 
 
 def glfw_path(module: str) -> str:
-    return os.path.join(base, 'glfw-{}.so'.format(module))
+    prefix = 'kitty.' if getattr(sys, 'frozen', False) else ''
+    return os.path.join(extensions_dir, f'{prefix}glfw-{module}.so')
 
 
 def detect_if_wayland_ok() -> bool:
@@ -171,26 +146,7 @@ def detect_if_wayland_ok() -> bool:
     wayland = glfw_path('wayland')
     if not os.path.exists(wayland):
         return False
-    # GNOME does not support xdg-decorations
-    # https://gitlab.gnome.org/GNOME/mutter/issues/217
-    import ctypes
-    lib = ctypes.CDLL(wayland)
-    check = lib.glfwWaylandCheckForServerSideDecorations
-    check.restype = ctypes.c_char_p
-    check.argtypes = ()
-    try:
-        ans = bytes(check())
-    except Exception:
-        return False
-    if ans == b'NO':
-        print(
-                'Your Wayland compositor does not support server side window decorations,'
-                ' disabling Wayland. You can force Wayland support using the'
-                ' linux_display_server option in kitty.conf'
-                ' See https://drewdevault.com/2018/01/27/Sway-and-client-side-decorations.html'
-                ' for more information.',
-                file=sys.stderr)
-    return ans == b'YES'
+    return True
 
 
 def is_wayland(opts: Optional[Options] = None) -> bool:
@@ -220,3 +176,11 @@ def resolve_custom_file(path: str) -> str:
     if not os.path.isabs(path):
         path = os.path.join(config_dir, path)
     return path
+
+
+def read_kitty_resource(name: str) -> bytes:
+    try:
+        from importlib.resources import read_binary
+    except ImportError:
+        from importlib_resources import read_binary  # type: ignore
+    return read_binary('kitty', name)

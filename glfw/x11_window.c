@@ -185,6 +185,7 @@ static int translateState(int state)
 {
     int mods = 0;
 
+    /* Need some way to expose hyper and meta without xkbcommon-x11 */
     if (state & ShiftMask)
         mods |= GLFW_MOD_SHIFT;
     if (state & ControlMask)
@@ -224,7 +225,8 @@ static void sendEventToWM(_GLFWwindow* window, Atom type,
 
 // Updates the normal hints according to the window settings
 //
-static void updateNormalHints(_GLFWwindow* window, int width, int height)
+static void
+updateNormalHints(_GLFWwindow* window, int width, int height)
 {
     XSizeHints* hints = XAllocSizeHints();
 
@@ -257,7 +259,7 @@ static void updateNormalHints(_GLFWwindow* window, int width, int height)
             }
 
             if (window->widthincr != GLFW_DONT_CARE &&
-                window->heightincr != GLFW_DONT_CARE)
+                window->heightincr != GLFW_DONT_CARE && !window->x11.maximized)
             {
                 hints->flags |= PResizeInc;
                 hints->width_inc = window->widthincr;
@@ -1743,6 +1745,9 @@ static void processEvent(XEvent *event)
                 if (window->x11.maximized != maximized)
                 {
                     window->x11.maximized = maximized;
+                    int width, height;
+                    _glfwPlatformGetWindowSize(window, &width, &height);
+                    updateNormalHints(window, width, height);
                     _glfwInputWindowMaximize(window, maximized);
                 }
             }
@@ -1990,8 +1995,8 @@ void _glfwPlatformSetWindowIcon(_GLFWwindow* window,
         for (i = 0;  i < count;  i++)
             longCount += 2 + images[i].width * images[i].height;
 
-        long* icon = calloc(longCount, sizeof(long));
-        long* target = icon;
+        unsigned long* icon = calloc(longCount, sizeof(unsigned long));
+        unsigned long* target = icon;
 
         for (i = 0;  i < count;  i++)
         {
@@ -2000,10 +2005,9 @@ void _glfwPlatformSetWindowIcon(_GLFWwindow* window,
 
             for (j = 0;  j < images[i].width * images[i].height;  j++)
             {
-                *target++ = (images[i].pixels[j * 4 + 0] << 16) |
-                            (images[i].pixels[j * 4 + 1] <<  8) |
-                            (images[i].pixels[j * 4 + 2] <<  0) |
-                            (images[i].pixels[j * 4 + 3] << 24);
+                unsigned char *p = images->pixels + j * 4;
+                const unsigned char r = *p++, g = *p++, b = *p++, a = *p++;
+                *target++ = a << 24 | (r << 16) | (g << 8) | b;
             }
         }
 
@@ -2778,7 +2782,7 @@ const char* _glfwPlatformGetNativeKeyName(int native_key)
     return glfw_xkb_keysym_name(native_key);
 }
 
-int _glfwPlatformGetNativeKeyForKey(int key)
+int _glfwPlatformGetNativeKeyForKey(uint32_t key)
 {
     return glfw_xkb_sym_for_key(key);
 }
@@ -3086,8 +3090,8 @@ VkResult _glfwPlatformCreateWindowSurface(VkInstance instance,
 }
 
 void
-_glfwPlatformUpdateIMEState(_GLFWwindow *w, int which, int a, int b, int c, int d) {
-    glfw_xkb_update_ime_state(w, &_glfw.x11.xkb, which, a, b, c, d);
+_glfwPlatformUpdateIMEState(_GLFWwindow *w, const GLFWIMEUpdateEvent *ev) {
+    glfw_xkb_update_ime_state(w, &_glfw.x11.xkb, ev);
 }
 
 //////////////////////////////////////////////////////////////////////////

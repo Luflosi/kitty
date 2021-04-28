@@ -10,6 +10,7 @@
 #include "state.h"
 #include "emoji.h"
 #include "unicode-data.h"
+#include "charsets.h"
 
 #define MISSING_GLYPH 4
 #define MAX_NUM_EXTRA_GLYPHS 8u
@@ -23,6 +24,9 @@ extern PyTypeObject Line_Type;
 
 typedef struct SpecialGlyphCache SpecialGlyphCache;
 enum {NO_FONT=-3, MISSING_FONT=-2, BLANK_FONT=-1, BOX_FONT=0};
+typedef enum {
+    LIGATURE_UNKNOWN, INFINITE_LIGATURE_START, INFINITE_LIGATURE_MIDDLE, INFINITE_LIGATURE_END
+} LigatureType;
 
 
 typedef struct {
@@ -72,6 +76,8 @@ typedef struct {
 static SymbolMap *symbol_maps = NULL;
 static size_t num_symbol_maps = 0;
 
+typedef enum { SPACER_STARTEGY_UNKNOWN, SPACERS_BEFORE, SPACERS_AFTER } SpacerStrategy;
+
 typedef struct {
     PyObject *face;
     // Map glyphs to sprite map co-ords
@@ -80,6 +86,7 @@ typedef struct {
     size_t num_ffs_hb_features;
     SpecialGlyphCache special_glyph_cache[SPECIAL_GLYPH_CACHE_SIZE];
     bool bold, italic, emoji_presentation;
+    SpacerStrategy spacer_strategy;
 } Font;
 
 typedef struct {
@@ -322,7 +329,7 @@ void
 clear_sprite_map(Font *font) {
 #define CLEAR(s) s->filled = false; s->rendered = false; s->colored = false; s->glyph = 0; zero_at_ptr(&s->extra_glyphs); s->x = 0; s->y = 0; s->z = 0; s->ligature_index = 0;
     SpritePosition *s;
-    for (size_t i = 0; i < sizeof(font->sprite_map)/sizeof(font->sprite_map[0]); i++) {
+    for (size_t i = 0; i < arraysz(font->sprite_map); i++) {
         s = font->sprite_map + i;
         CLEAR(s);
         while ((s = s->next)) {
@@ -336,7 +343,7 @@ void
 clear_special_glyph_cache(Font *font) {
 #define CLEAR(s) s->data = 0; s->glyph = 0;
     SpecialGlyphCache *s;
-    for (size_t i = 0; i < sizeof(font->special_glyph_cache)/sizeof(font->special_glyph_cache[0]); i++) {
+    for (size_t i = 0; i < arraysz(font->special_glyph_cache); i++) {
         s = font->special_glyph_cache + i;
         CLEAR(s);
         while ((s = s->next)) {
@@ -595,13 +602,8 @@ START_ALLOW_CASE_RANGE
             return BLANK_FONT;
         case 0x2500 ... 0x2573:
         case 0x2574 ... 0x259f:
-        case 0xe0b0 ... 0xe0b4:
         case 0x2800 ... 0x28ff:
-        case 0xe0b6:
-        case 0xe0b8: // 
-        case 0xe0ba: //   
-        case 0xe0bc: // 
-        case 0xe0be: //   
+        case 0xe0b0 ... 0xe0bf:  // powerline box drawing
         case 0x1fb00 ... 0x1fb8b:  // symbols for legacy computing
         case 0x1fba0 ... 0x1fbae:
             return BOX_FONT;
@@ -661,9 +663,9 @@ render_alpha_mask(uint8_t *alpha_mask, pixel* dest, Region *src_rect, Region *de
         pixel *d = dest + dest_stride * dr;
         uint8_t *s = alpha_mask + src_stride * sr;
         for(size_t sc = src_rect->left, dc = dest_rect->left; sc < src_rect->right && dc < dest_rect->right; sc++, dc++) {
-            pixel val = d[dc];
+            uint8_t src_alpha = d[dc] & 0xff;
             uint8_t alpha = s[sc];
-            d[dc] = 0xffffff00 | MIN(0xffu, alpha + (val & 0xff));
+            d[dc] = 0xffffff00 | MAX(alpha, src_alpha);
         }
     }
 }
@@ -767,7 +769,7 @@ typedef struct {
 
 typedef struct {
     unsigned int first_glyph_idx, first_cell_idx, num_glyphs, num_cells;
-    bool has_special_glyph, is_space_ligature;
+    bool has_special_glyph, is_space_ligature, started_with_infinite_ligature;
 } Group;
 
 typedef struct {
@@ -887,10 +889,37 @@ check_cell_consumed(CellData *cell_data, CPUCell *last_cpu_cell) {
     return 0;
 }
 
+static inline LigatureType
+ligature_type_from_glyph_name(const char *glyph_name) {
+    const char *p = strrchr(glyph_name, '_');
+    if (!p) return LIGATURE_UNKNOWN;
+    if (strcmp(p, "_start.seq") == 0) return INFINITE_LIGATURE_START;
+    if (strcmp(p, "_middle.seq") == 0) return INFINITE_LIGATURE_MIDDLE;
+    if (strcmp(p, "_end.seq") == 0) return INFINITE_LIGATURE_END;
+    return LIGATURE_UNKNOWN;
+}
+
+#define G(x) (group_state.x)
+
+static inline void
+detect_spacer_strategy(hb_font_t *hbf, Font *font) {
+    CPUCell cpu_cells[3] = {{.ch = '='}, {.ch = '='}, {.ch = '='}};
+    GPUCell gpu_cells[3] = {{.attrs = 1}, {.attrs = 1}, {.attrs = 1}};
+    shape(cpu_cells, gpu_cells, arraysz(cpu_cells), hbf, font, false);
+    font->spacer_strategy = SPACERS_BEFORE;
+    if (G(num_glyphs) > 1) {
+        glyph_index glyph_id = G(info)[G(num_glyphs) - 1].codepoint;
+        bool is_special = is_special_glyph(glyph_id, font, &G(current_cell_data));
+        bool is_empty = is_special && is_empty_glyph(glyph_id, font);
+        if (is_empty) font->spacer_strategy = SPACERS_AFTER;
+    }
+}
 
 static inline void
 shape_run(CPUCell *first_cpu_cell, GPUCell *first_gpu_cell, index_type num_cells, Font *font, bool disable_ligature) {
-    shape(first_cpu_cell, first_gpu_cell, num_cells, harfbuzz_font_for_face(font->face), font, disable_ligature);
+    hb_font_t *hbf = harfbuzz_font_for_face(font->face);
+    if (font->spacer_strategy == SPACER_STARTEGY_UNKNOWN) detect_spacer_strategy(hbf, font);
+    shape(first_cpu_cell, first_gpu_cell, num_cells, hbf, font, disable_ligature);
 #if 0
         static char dbuf[1024];
         // You can also generate this easily using hb-shape --show-extents --cluster-level=1 --shapers=ot /path/to/font/file text
@@ -905,25 +934,35 @@ shape_run(CPUCell *first_cpu_cell, GPUCell *first_gpu_cell, index_type num_cells
      * Ligature fonts, take two common approaches:
      * 1. ABC becomes EMPTY, EMPTY, WIDE GLYPH this means we have to render N glyphs in N cells (example Fira Code)
      * 2. ABC becomes WIDE GLYPH this means we have to render one glyph in N cells (example Operator Mono Lig)
+     * 3. ABC becomes WIDE GLYPH, EMPTY, EMPTY this means we have to render N glyphs in N cells (example Cascadia Code)
+     * 4. Variable length ligatures are identified by a glyph naming convention of _start.seq, _middle.seq and _end.seq
+     *    with EMPTY glyphs in the middle or after (both Fira Code and Cascadia Code)
      *
      * We rely on the cluster numbers from harfbuzz to tell us how many unicode codepoints a glyph corresponds to.
-     * Then we check if the glyph is a ligature glyph (is_special_glyph) and if it is an empty glyph. These three
-     * datapoints give us enough information to satisfy the constraint above, for a wide variety of fonts.
+     * Then we check if the glyph is a ligature glyph (is_special_glyph) and if it is an empty glyph.
+     * We detect if the font uses EMPTY glyphs before or after ligature glyphs (1. or 3. above) by checking what it does for ===.
+     * Finally we look at the glyph name. These five datapoints give us enough information to satisfy the constraint above,
+     * for a wide variety of fonts.
      */
     uint32_t cluster, next_cluster;
     bool add_to_current_group;
-#define G(x) (group_state.x)
+    char glyph_name[128]; glyph_name[arraysz(glyph_name)-1] = 0;
+    bool prev_glyph_was_inifinte_ligature_end = false;
 #define MAX_GLYPHS_IN_GROUP (MAX_NUM_EXTRA_GLYPHS + 1u)
     while (G(glyph_idx) < G(num_glyphs) && G(cell_idx) < G(num_cells)) {
         glyph_index glyph_id = G(info)[G(glyph_idx)].codepoint;
+        hb_font_glyph_to_string(hbf, glyph_id, glyph_name, arraysz(glyph_name)-1);
+        LigatureType ligature_type = ligature_type_from_glyph_name(glyph_name);
         cluster = G(info)[G(glyph_idx)].cluster;
         bool is_special = is_special_glyph(glyph_id, font, &G(current_cell_data));
         bool is_empty = is_special && is_empty_glyph(glyph_id, font);
         uint32_t num_codepoints_used_by_glyph = 0;
         bool is_last_glyph = G(glyph_idx) == G(num_glyphs) - 1;
         Group *current_group = G(groups) + G(group_idx);
+
         if (is_last_glyph) {
             num_codepoints_used_by_glyph = UINT32_MAX;
+            next_cluster = 0;
         } else {
             next_cluster = G(info)[G(glyph_idx) + 1].cluster;
             // RTL languages like Arabic have decreasing cluster numbers
@@ -931,17 +970,32 @@ shape_run(CPUCell *first_cpu_cell, GPUCell *first_gpu_cell, index_type num_cells
         }
         if (!current_group->num_glyphs) {
             add_to_current_group = true;
+        } else if (current_group->started_with_infinite_ligature) {
+            if (prev_glyph_was_inifinte_ligature_end) add_to_current_group = is_empty && font->spacer_strategy == SPACERS_AFTER;
+            else add_to_current_group = ligature_type == INFINITE_LIGATURE_MIDDLE || ligature_type == INFINITE_LIGATURE_END || is_empty;
         } else {
             if (is_special) {
-                add_to_current_group = G(prev_was_empty);
+                if (!current_group->num_cells) add_to_current_group = true;
+                else if (font->spacer_strategy == SPACERS_BEFORE) add_to_current_group = G(prev_was_empty);
+                else add_to_current_group = is_empty;
             } else {
-                add_to_current_group = !G(prev_was_special);
+                add_to_current_group = !G(prev_was_special) || !current_group->num_cells;
             }
+        }
+        static const bool debug_grouping = false;
+        if (debug_grouping) {
+            char ch[8] = {0};
+            encode_utf8(G(current_cell_data).current_codepoint, ch);
+            printf("\x1b[32m→ %s\x1b[m glyph_idx: %zu glyph_id: %u (%s) group_idx: %zu cluster: %u -> %u is_special: %d\n"
+                    "  num_codepoints_used_by_glyph: %u current_group: (%u cells, %u glyphs) add_to_current_group: %d\n",
+                    ch, G(glyph_idx), glyph_id, glyph_name, G(group_idx), cluster, next_cluster, is_special,
+                    num_codepoints_used_by_glyph, current_group->num_cells, current_group->num_glyphs, add_to_current_group);
         }
         if (current_group->num_glyphs >= MAX_GLYPHS_IN_GROUP || current_group->num_cells >= MAX_GLYPHS_IN_GROUP) add_to_current_group = false;
 
-        if (!add_to_current_group) { G(group_idx)++; current_group = G(groups) + G(group_idx); }
+        if (!add_to_current_group) { current_group = G(groups) + ++G(group_idx); }
         if (!current_group->num_glyphs++) {
+            if (ligature_type == INFINITE_LIGATURE_START || ligature_type == INFINITE_LIGATURE_MIDDLE) current_group->started_with_infinite_ligature = true;
             current_group->first_glyph_idx = G(glyph_idx);
             current_group->first_cell_idx = G(cell_idx);
         }
@@ -996,6 +1050,7 @@ shape_run(CPUCell *first_cpu_cell, GPUCell *first_gpu_cell, index_type num_cells
         G(prev_was_special) = is_special;
         G(prev_was_empty) = is_empty;
         G(previous_cluster) = cluster;
+        prev_glyph_was_inifinte_ligature_end = ligature_type == INFINITE_LIGATURE_END;
         G(glyph_idx)++;
     }
 #undef MOVE_GLYPH_TO_NEXT_GROUP
@@ -1055,11 +1110,6 @@ render_groups(FontGroup *fg, Font *font, bool center_glyph) {
         // there exist stupid fonts like Powerline that have no space glyph,
         // so special case it: https://github.com/kovidgoyal/kitty/issues/1225
         unsigned int num_glyphs = group->is_space_ligature ? 1 : group->num_glyphs;
-#ifdef __APPLE__
-        // FiraCode ligatures need to be centered on macOS
-        // see https://github.com/kovidgoyal/kitty/issues/2591
-        if (is_group_calt_ligature(group)) center_glyph = true;
-#endif
         render_group(fg, group->num_cells, num_glyphs, G(first_cpu_cell) + group->first_cell_idx, G(first_gpu_cell) + group->first_cell_idx, G(info) + group->first_glyph_idx, G(positions) + group->first_glyph_idx, font, primary, &ed, center_glyph);
         idx++;
     }

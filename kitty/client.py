@@ -11,7 +11,6 @@
 import sys
 from contextlib import suppress
 from typing import Any
-from functools import partial
 
 
 CSI = '\033['
@@ -109,6 +108,22 @@ def screen_delete_characters(count: int) -> None:
     write(CSI + '%dP' % count)
 
 
+def screen_push_colors(which: int) -> None:
+    write(CSI + '%d#P' % which)
+
+
+def screen_pop_colors(which: int) -> None:
+    write(CSI + '%d#Q' % which)
+
+
+def screen_report_colors() -> None:
+    write(CSI + '#R')
+
+
+def screen_repeat_character(num: int) -> None:
+    write(CSI + '%db' % num)
+
+
 def screen_insert_characters(count: int) -> None:
     write(CSI + '%d@' % count)
 
@@ -192,16 +207,15 @@ def write_osc(code: int, string: str = '') -> None:
     write(OSC + str(code) + string + '\x07')
 
 
-set_dynamic_color = set_color_table_color = write_osc
-screen_push_dynamic_colors = partial(write_osc, 30001)
-screen_pop_dynamic_colors = partial(write_osc, 30101)
+set_dynamic_color = set_color_table_color = process_cwd_notification = write_osc
 
 
 def replay(raw: str) -> None:
+    specials = {'draw', 'set_title', 'set_icon', 'set_dynamic_color', 'set_color_table_color', 'process_cwd_notification'}
     for line in raw.splitlines():
         if line.strip() and not line.startswith('#'):
             cmd, rest = line.partition(' ')[::2]
-            if cmd in {'draw', 'set_title', 'set_icon', 'set_dynamic_color', 'set_color_table_color'}:
+            if cmd in specials:
                 globals()[cmd](rest)
             else:
                 r = map(int, rest.split()) if rest else ()
