@@ -4,6 +4,7 @@ Frequently Asked Questions
 .. highlight:: sh
 
 .. contents::
+   :local:
 
 Some special symbols are rendered small/truncated in kitty?
 -----------------------------------------------------------
@@ -169,6 +170,19 @@ You can, of course, also run |kitty| from a terminal with command line options, 
 And within |kitty| itself, you can always run |kitty| using just `kitty` as it
 cleverly adds itself to the ``PATH``.
 
+I catted a binary file and now kitty is hung?
+-----------------------------------------------
+
+**Never** output unknown binary data directly into a terminal.
+
+Terminals have a single channel for both data and control. Certain bytes
+are control codes. Some of these control codes are of arbitrary length, so
+if the binary data you output into the terminal happens to contain the starting
+sequence for one of these control codes, the terminal will hang waiting for
+the closing sequence. Press :kbd:`ctrl+shift+delete` to reset the terminal.
+
+If you do want to cat unknown data, use ``cat -v``.
+
 
 kitty is not able to use my favorite font?
 ---------------------------------------------
@@ -229,23 +243,11 @@ For example::
     map alt+s send_text all \x13
 
 This maps :kbd:`alt+s` to :kbd:`ctrl+s`. To figure out what bytes to use for
-the :sc:`send_text <send_text>` you can use the ``showkey`` utility. Run::
+the :sc:`send_text <send_text>` you can use the ``show_key`` kitten. Run::
 
-    showkey -a
+    kitty +kitten show_key
 
-Then press the key you want to emulate. On macOS, this utility is currently not
-available. The manual way to figure it out is:
-
-    1. Look up your key's decimal value in the table at the bottom of `this
-       page <http://ascii-table.com/ansi-escape-sequences.php>`_ or any
-       ANSI escape sequence table. There are different modifiers for :kbd:`ctrl`,
-       :kbd:`alt`, etc. For e.g., for :kbd:`ctrl+s`, find the ``S`` row and look at
-       the third column value, ``19``.
-
-    2. Convert the decimal value to hex with ``kitty +runpy "print(hex(19))"``.
-       This shows the hex value, ``13`` in this case.
-
-    3. Use ``\x(hexval)`` in your ``send_text`` command in kitty. So in this example, ``\x13``
+Then press the key you want to emulate.
 
 How do I open a new window or tab with the same working directory as the current window?
 --------------------------------------------------------------------------------------------

@@ -19,24 +19,25 @@ from typing import (
 from .child import ProcessDesc
 from .cli_stub import CLIOptions
 from .config import build_ansi_color_table
-from .constants import appname, wakeup, is_macos
+from .constants import appname, is_macos, wakeup
 from .fast_data_types import (
     BGIMAGE_PROGRAM, BLIT_PROGRAM, CELL_BG_PROGRAM, CELL_FG_PROGRAM,
     CELL_PROGRAM, CELL_SPECIAL_PROGRAM, DCS, DECORATION, DIM, GLFW_MOD_CONTROL,
     GRAPHICS_ALPHA_MASK_PROGRAM, GRAPHICS_PREMULT_PROGRAM, GRAPHICS_PROGRAM,
     MARK, MARK_MASK, OSC, REVERSE, SCROLL_FULL, SCROLL_LINE, SCROLL_PAGE,
     STRIKETHROUGH, TINT_PROGRAM, KeyEvent, Screen, add_timer, add_window,
-    cell_size_for_window, compile_program, encode_key_for_tty, get_boss,
-    get_clipboard_string, init_cell_program, pt_to_px, set_clipboard_string,
-    set_titlebar_color, set_window_padding, set_window_render_data,
-    update_window_title, update_window_visibility, viewport_for_window
+    cell_size_for_window, click_mouse_url, compile_program, encode_key_for_tty,
+    get_boss, get_clipboard_string, init_cell_program, mouse_selection,
+    pt_to_px, set_clipboard_string, set_titlebar_color, set_window_padding,
+    set_window_render_data, update_window_title, update_window_visibility,
+    viewport_for_window
 )
 from .keys import keyboard_mode_name
 from .notify import NotificationCommand, handle_notification_cmd
 from .options_stub import Options
 from .rgb import to_color
 from .terminfo import get_capabilities
-from .types import ScreenGeometry, WindowGeometry
+from .types import MouseEvent, ScreenGeometry, WindowGeometry
 from .typing import BossType, ChildType, EdgeLiteral, TabType, TypedDict
 from .utils import (
     color_as_int, get_primary_selection, load_shaders, log_error, open_cmd,
@@ -296,6 +297,7 @@ class Window:
         watchers: Optional[Watchers] = None
     ):
         self.watchers = watchers or Watchers()
+        self.current_mouse_event_button = 0
         self.prev_osc99_cmd = NotificationCommand()
         self.action_on_close: Optional[Callable] = None
         self.action_on_removal: Optional[Callable] = None
@@ -530,6 +532,14 @@ class Window:
     def use_utf8(self, on: bool) -> None:
         get_boss().child_monitor.set_iutf8_winid(self.id, on)
 
+    def on_mouse_event(self, event: Dict[str, Any]) -> bool:
+        ev = MouseEvent(**event)
+        self.current_mouse_event_button = ev.button
+        action = self.opts.mousemap.get(ev)
+        if action is None:
+            return False
+        return get_boss().dispatch_action(action, window_for_dispatch=self, dispatch_type='MouseEvent')
+
     def open_url(self, url: str, hyperlink_id: int, cwd: Optional[str] = None) -> None:
         if hyperlink_id:
             if not self.opts.allow_hyperlinks:
@@ -611,6 +621,10 @@ class Window:
     @property
     def has_activity_since_last_focus(self) -> bool:
         return self.screen.has_activity_since_last_focus()
+
+    def on_activity_since_last_focus(self) -> None:
+        if self.opts.tab_activity_symbol:
+            get_boss().on_activity_since_last_focus(self)
 
     def on_bell(self) -> None:
         if self.opts.command_on_bell and self.opts.command_on_bell != ['none']:
@@ -781,6 +795,28 @@ class Window:
             else:
                 if self.child_title:
                     self.title_stack.append(self.child_title)
+    # }}}
+
+    # mouse actions {{{
+    def mouse_click_url(self) -> None:
+        click_mouse_url(self.os_window_id, self.tab_id, self.id)
+
+    def mouse_click_url_or_select(self) -> None:
+        if not self.screen.has_selection():
+            self.mouse_click_url()
+
+    def mouse_selection(self, code: int) -> None:
+        mouse_selection(self.os_window_id, self.tab_id, self.id, code, self.current_mouse_event_button)
+
+    def paste_selection(self) -> None:
+        txt = get_boss().current_primary_selection()
+        if txt:
+            self.paste(txt)
+
+    def paste_selection_or_clipboard(self) -> None:
+        txt = get_boss().current_primary_selection_or_clipboard()
+        if txt:
+            self.paste(txt)
     # }}}
 
     def text_for_selection(self) -> str:

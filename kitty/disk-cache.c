@@ -13,7 +13,7 @@
 
 #include "disk-cache.h"
 #include "safe-wrappers.h"
-#include "uthash.h"
+#include "kitty-uthash.h"
 #include "loop-utils.h"
 #include "threading.h"
 #include "cross-platform-random.h"

@@ -163,7 +163,7 @@ typedef struct _GLFWDisplayLinkNS
 {
     CVDisplayLinkRef displayLink;
     CGDirectDisplayID displayID;
-    monotonic_t lastRenderFrameRequestedAt;
+    monotonic_t lastRenderFrameRequestedAt, first_unserviced_render_frame_request_at;
 } _GLFWDisplayLinkNS;
 
 // Cocoa-specific global data
@@ -251,3 +251,4 @@ void _glfwDispatchTickCallback(void);
 void _glfwDispatchRenderFrame(CGDirectDisplayID);
 void _glfwShutdownCVDisplayLink(unsigned long long, void*);
 void _glfwCocoaPostEmptyEvent(void);
+void _glfw_create_cv_display_link(_GLFWDisplayLinkNS *entry);

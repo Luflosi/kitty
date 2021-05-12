@@ -49,6 +49,12 @@ kitty - the fast, featureful, GPU based terminal emulator
     Screenshot, showing vim, tig and git running in |kitty| with the 'Tall' layout
 
 
+
+.. contents::
+   :local:
+   :depth: 1
+
+
 .. _quickstart:
 
 Quickstart
@@ -73,9 +79,6 @@ and `Solus <https://dev.getsol.us/source/kitty/>`_.
 
 See :doc:`Configuring kitty <conf>` for help on configuring |kitty| and
 :doc:`Invocation <invocation>` for the command line arguments |kitty| supports.
-
-
-.. contents::
 
 
 Design philosophy
@@ -109,7 +112,7 @@ Layouts
 A layout is an arrangement of multiple kitty *windows* inside a top-level OS window. You can create a new window
 using the :sc:`new_window` key combination.
 
-Currently, there are six layouts available:
+Currently, there are seven layouts available:
 
 * **Fat** -- One (or optionally more) windows are shown full width on the top, the rest of the windows are shown side-by-side on the bottom
 * **Grid** -- All windows are shown in a grid
@@ -255,17 +258,21 @@ For example:
 Mouse features
 -------------------
 
-* You can hold down :kbd:`ctrl+shift` and click on a URL to open it in a browser.
+* You can click on a URL to open it in a browser.
 * You can double click to select a word and then drag to select more words.
 * You can triple click to select a line and then drag to select more lines.
 * You can right click to extend a previous selection.
 * You can hold down :kbd:`ctrl+alt` and drag with the mouse to select in
-  columns (see also :opt:`rectangle_select_modifiers`).
+  columns.
 * Selecting text automatically copies it to the primary clipboard (on
   platforms with a primary clipboard).
+* You can middle click to paste from the primary clipboard (on platforms
+  with a primary clipboard).
 * You can select text with kitty even when a terminal program has grabbed
-  the mouse by holding down the :kbd:`shift` key (see also
-  :opt:`terminal_select_modifiers`).
+  the mouse by holding down the :kbd:`shift` key.
+
+All these actions can be customized in :file:`kitty.conf` as described
+:ref:`here <conf-kitty-mouse.mousemap>`.
 
 
 Font control

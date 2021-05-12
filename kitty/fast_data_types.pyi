@@ -10,6 +10,12 @@ from kitty.fonts.render import FontObject
 from kitty.options_stub import Options
 
 # Constants {{{
+MOUSE_SELECTION_LINE: int
+MOUSE_SELECTION_EXTEND: int
+MOUSE_SELECTION_NORMAL: int
+MOUSE_SELECTION_WORD: int
+MOUSE_SELECTION_RECTANGLE: int
+MOUSE_SELECTION_LINE_FROM_POINT: int
 KITTY_VCS_REV: str
 KITTY_VCS_VERSION: str
 NO_CLOSE_REQUESTED: int
@@ -972,6 +978,9 @@ class Screen:
     def reset_callbacks(self) -> None:
         pass
 
+    def has_selection(self) -> bool:
+        pass
+
     def text_for_selection(self) -> Tuple[str, ...]:
         pass
 
@@ -991,6 +1000,9 @@ class Screen:
         pass
 
     def scroll_to_next_mark(self, mark: int = 0, backwards: bool = True) -> bool:
+        pass
+
+    def reverse_scroll(self, amt: int, fill_from_scrollback: bool = False) -> bool:
         pass
 
     def clear_selection(self) -> None:
@@ -1153,4 +1165,12 @@ def spawn(
 
 
 def set_window_padding(os_window_id: int, tab_id: int, window_id: int, left: int, top: int, right: int, bottom: int) -> None:
+    pass
+
+
+def click_mouse_url(os_window_id: int, tab_id: int, window_id: int) -> None:
+    pass
+
+
+def mouse_selection(os_window_id: int, tab_id: int, window_id: int, code: int, button: int) -> None:
     pass

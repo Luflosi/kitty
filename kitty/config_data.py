@@ -6,12 +6,12 @@
 import os
 from gettext import gettext as _
 from typing import (
-    Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, Set,
+    Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set,
     Tuple, TypeVar, Union
 )
 
 from . import fast_data_types as defines
-from .conf.definition import Option, Shortcut, option_func
+from .conf.definition import Option, OptionOrAction, option_func
 from .conf.utils import (
     choices, to_bool, to_cmdline as tc, to_color, to_color_or_none, unit_float
 )
@@ -112,10 +112,10 @@ def uniq(vals: Iterable[T]) -> List[T]:
 # Groups {{{
 
 
-all_options: Dict[str, Union[Option, Sequence[Shortcut]]] = {}
+all_options: Dict[str, OptionOrAction] = {}
 
 
-o, k, g, all_groups = option_func(all_options, {
+o, k, m, g, all_groups = option_func(all_options, {
     'fonts': [
         _('Fonts'),
         _('kitty has very powerful font management. You can configure individual\n'
@@ -139,6 +139,35 @@ as color16 to color255.''')
     ],
     'advanced': [_('Advanced')],
     'os': [_('OS specific tweaks')],
+    'mouse.mousemap': [
+        _('Mouse actions'),
+        _('''\
+Mouse buttons can be remapped to perform arbitrary actions. The syntax for
+doing so is:
+
+.. code-block:: none
+
+    mouse_map button-name event-type modes action
+
+Where ``button-name`` is one of ``left``, ``middle``, ``right`` or ``b1 ... b8``
+with added keyboard modifiers, for example: ``ctrl+shift+left`` refers to holding
+the :kbd:`ctrl+shift` keys while clicking with the left mouse button. The
+number ``b1 ... b8`` can be used to refer to upto eight buttons on a mouse.
+
+``event-type`` is one ``press``, ``release``, ``doublepress``, ``triplepress``,
+``click`` and ``doubleclick``.  ``modes`` indicates whether the action is
+performed when the mouse is grabbed by the terminal application or not. It can
+have one or more or the values, ``grabbed,ungrabbed``.
+
+You can run kitty with the :option:`kitty --debug-input` command line option
+to see mouse events. See the builtin actions below to get a sense of what is possible.
+
+.. note::
+    Once a selection is started, releasing the button that started it will
+    automatically end it and no release event will be dispatched.
+
+'''),
+    ],
     'shortcuts': [
         _('Keyboard shortcuts'),
         _('''\
@@ -157,7 +186,7 @@ as GLFW keys.
 
 Finally, you can use raw system key codes to map keys, again only for keys that are not
 known as GLFW keys. To see the system key code
-for a key, start kitty with the :option:`kitty --debug-keyboard` option. Then kitty will
+for a key, start kitty with the :option:`kitty --debug-input` option. Then kitty will
 output some debug text for every key event. In that text look for ``native_code``
 the value of that becomes the key name in the shortcut. For example:
 
@@ -557,10 +586,6 @@ url_style_map = dict(
 
 o('url_style', 'curly', option_type=url_style)
 
-o('open_url_modifiers', 'kitty_mod', option_type=to_modifiers, long_text=_('''
-The modifier keys to press when clicking with the
-mouse on URLs to open the URL'''))
-
 o('open_url_with', 'default', option_type=to_cmdline, long_text=_('''
 The program with which to open URLs that are clicked on.
 The special value :code:`default` means to use the
@@ -610,13 +635,6 @@ Remove spaces at the end of lines when copying to clipboard.
 A value of :code:`smart` will do it when using normal selections, but not rectangle
 selections. :code:`always` will always do it.'''))
 
-o('rectangle_select_modifiers', 'ctrl+alt', option_type=to_modifiers, long_text=_('''
-The modifiers to use rectangular selection (i.e. to select text in a
-rectangular block with the mouse)'''))
-
-o('terminal_select_modifiers', 'shift', option_type=to_modifiers, long_text=_('''
-The modifiers to override mouse selection even when a terminal application has grabbed the mouse'''))
-
 o('select_by_word_characters', '@-./_~?&=%+#', long_text=_('''
 Characters considered part of a word when double clicking. In addition to these characters
 any character that is marked as an alphanumeric character in the unicode
@@ -644,6 +662,32 @@ o('pointer_shape_when_dragging', 'beam', option_type=choices('arrow', 'beam', 'h
 The default shape of the mouse pointer when dragging across text.
 Valid values are: :code:`arrow`, :code:`beam` and :code:`hand`
 '''))
+
+g('mouse.mousemap')  # {{{
+
+m('click_url_or_select', 'left', 'click', 'ungrabbed', 'mouse_click_url_or_select', _('Click the link under the mouse cursor when no selection is created'))
+m('click_url_or_select_grabbed', 'shift+left', 'click', 'grabbed,ungrabbed', 'mouse_click_url_or_select', _(
+    'Click the link under the mouse cursor when no selection is created even if grabbed'))
+m('click_url', 'ctrl+shift+left', 'release', 'grabbed,ungrabbed', 'mouse_click_url',
+  _('Click the link under the mouse cursor'), _('Variant with :kbd:`ctrl+shift` is present only for legacy compatibility.'))
+
+for grabbed in (False, True):
+    modes = 'ungrabbed' + (',grabbed' if grabbed else '')
+    name_s = '_grabbed' if grabbed else ''
+    mods_p = 'shift+' if grabbed else ''
+    ts = _(' even when grabbed') if grabbed else ''
+    m('paste_selection' + name_s, mods_p + 'middle', 'release', modes, 'paste_selection', _('Paste from the primary selection') + ts)
+    m('start_simple_selection' + name_s, mods_p + 'left', 'press', modes, 'mouse_selection normal', _('Start selecting text') + ts)
+    m('start_rectangle_selection' + name_s, mods_p + 'ctrl+alt+left', 'press', modes, 'mouse_selection rectangle',
+      _('Start selecting text in a rectangle') + ts)
+    m('select_word' + name_s, mods_p + 'left', 'doublepress', modes, 'mouse_selection word', _('Select a word') + ts)
+    line_desc = ''
+    if not grabbed:
+        line_desc = _('Select the entire line. If you would rather select from the clicked'
+                      ' point to the end of the line, use ``line_at_point`` instead of ``line`` above')
+    m('select_line' + name_s, mods_p + 'left', 'triplepress', modes, 'mouse_selection line', _('Select a line') + ts, line_desc)
+    m('extend_selection' + name_s, mods_p + 'right', 'press', modes, 'mouse_selection extend', _('Extend the current selection') + ts)
+# }}}
 
 # }}}
 
@@ -1303,7 +1347,7 @@ both Option keys as Alt, instead.
 '''))
 
 o('macos_hide_from_tasks', False, long_text=_('''
-Hide the kitty window from running tasks (:kbd:`Option+Tab`) on macOS.
+Hide the kitty window from running tasks (:kbd:`⌘+Tab`) on macOS.
 '''))
 
 o('macos_quit_when_last_window_closed', False, long_text=_('''
@@ -1350,6 +1394,7 @@ appropriate backend based on the system state is chosen
 automatically. Set it to :code:`x11` or :code:`wayland`
 to force the choice.'''))
 # }}}
+
 
 g('shortcuts')  # {{{
 

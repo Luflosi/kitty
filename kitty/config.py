@@ -19,15 +19,18 @@ from .conf.utils import (
     BadLine, init_config, key_func, load_config as _load_config, merge_dicts,
     parse_config_base, python_string, to_bool, to_cmdline
 )
-from .config_data import InvalidMods, all_options, parse_shortcut, type_convert
+from .config_data import (
+    InvalidMods, all_options, parse_mods, parse_shortcut, type_convert
+)
 from .constants import cache_dir, defconf, is_macos
 from .fonts import FontFeature
 from .options_stub import Options as OptionsStub
-from .types import SingleKey
+from .types import SingleKey, MouseEvent
 from .typing import TypedDict
 from .utils import expandvars, log_error
 
 KeyMap = Dict[SingleKey, 'KeyAction']
+MouseMap = Dict[MouseEvent, 'KeyAction']
 KeySequence = Tuple[SingleKey, ...]
 SubSequenceMap = Dict[KeySequence, 'KeyAction']
 SequenceMap = Dict[SingleKey, SubSequenceMap]
@@ -323,6 +326,22 @@ def scroll_to_mark(func: str, rest: str) -> FuncArgsType:
     return func, [parts[0] != 'next', max(0, min(int(parts[1]), 3))]
 
 
+@func_with_args('mouse_selection')
+def mouse_selection(func: str, rest: str) -> FuncArgsType:
+    cmap = getattr(mouse_selection, 'code_map', None)
+    if cmap is None:
+        cmap = {
+            'normal': defines.MOUSE_SELECTION_NORMAL,
+            'extend': defines.MOUSE_SELECTION_EXTEND,
+            'rectangle': defines.MOUSE_SELECTION_RECTANGLE,
+            'word': defines.MOUSE_SELECTION_WORD,
+            'line': defines.MOUSE_SELECTION_LINE,
+            'line_from_point': defines.MOUSE_SELECTION_LINE_FROM_POINT,
+        }
+        setattr(mouse_selection, 'code_map', cmap)
+    return func, [cmap[rest]]
+
+
 def parse_key_action(action: str) -> Optional[KeyAction]:
     parts = action.strip().split(maxsplit=1)
     func = parts[0]
@@ -344,7 +363,43 @@ all_key_actions: Set[str] = set()
 sequence_sep = '>'
 
 
-class KeyDefinition:
+class BaseDefinition:
+    action: KeyAction
+
+    def resolve_kitten_aliases(self, aliases: Dict[str, Sequence[str]]) -> None:
+        if not self.action.args:
+            return
+        kitten = self.action.args[0]
+        rest = self.action.args[1] if len(self.action.args) > 1 else ''
+        changed = False
+        for key, expanded in aliases.items():
+            if key == kitten:
+                changed = True
+                kitten = expanded[0]
+                if len(expanded) > 1:
+                    rest = expanded[1] + ' ' + rest
+        if changed:
+            self.action = self.action._replace(args=[kitten, rest.rstrip()])
+
+
+class MouseMapping(BaseDefinition):
+
+    def __init__(self, button: int, mods: int, repeat_count: int, grabbed: bool, action: KeyAction):
+        self.button = button
+        self.mods = mods
+        self.repeat_count = repeat_count
+        self.grabbed = grabbed
+        self.action = action
+
+    def resolve(self, kitty_mod: int) -> None:
+        self.mods = defines.resolve_key_mods(kitty_mod, self.mods)
+
+    @property
+    def trigger(self) -> MouseEvent:
+        return MouseEvent(self.button, self.mods, self.repeat_count, self.grabbed)
+
+
+class KeyDefinition(BaseDefinition):
 
     def __init__(self, is_sequence: bool, action: KeyAction, mods: int, is_native: bool, key: int, rest: Tuple[SingleKey, ...] = ()):
         self.is_sequence = is_sequence
@@ -362,21 +417,6 @@ class KeyDefinition:
 
         self.trigger = r(self.trigger)
         self.rest = tuple(map(r, self.rest))
-
-    def resolve_kitten_aliases(self, aliases: Dict[str, Sequence[str]]) -> None:
-        if not self.action.args:
-            return
-        kitten = self.action.args[0]
-        rest = self.action.args[1] if len(self.action.args) > 1 else ''
-        changed = False
-        for key, expanded in aliases.items():
-            if key == kitten:
-                changed = True
-                kitten = expanded[0]
-                if len(expanded) > 1:
-                    rest = expanded[1] + ' ' + rest
-        if changed:
-            self.action = self.action._replace(args=[kitten, rest.rstrip()])
 
 
 def parse_key(val: str, key_definitions: List[KeyDefinition]) -> None:
@@ -428,6 +468,48 @@ def parse_key(val: str, key_definitions: List[KeyDefinition]) -> None:
             else:
                 assert key is not None
                 key_definitions.append(KeyDefinition(False, paction, mods, is_native, key))
+
+
+def parse_mouse_action(val: str, mouse_mappings: List[MouseMapping]) -> None:
+    parts = val.split(maxsplit=3)
+    if len(parts) != 4:
+        log_error(f'Ignoring invalid mouse action: {val}')
+        return
+    xbutton, event, modes, action = parts
+    kparts = xbutton.split('+')
+    if len(kparts) > 1:
+        mparts, obutton = kparts[:-1], kparts[-1].lower()
+        mods = parse_mods(mparts, obutton)
+        if mods is None:
+            return
+    else:
+        obutton = parts[0].lower()
+        mods = 0
+    try:
+        b = {'left': 'b1', 'middle': 'b3', 'right': 'b2'}.get(obutton, obutton)[1:]
+        button = getattr(defines, f'GLFW_MOUSE_BUTTON_{b}')
+    except Exception:
+        log_error(f'Mouse button: {xbutton} not recognized, ignoring')
+        return
+    try:
+        count = {'doubleclick': -3, 'click': -2, 'release': -1, 'press': 1, 'doublepress': 2, 'triplepress': 3}[event.lower()]
+    except KeyError:
+        log_error(f'Mouse event type: {event} not recognized, ignoring')
+        return
+    specified_modes = frozenset(modes.lower().split(','))
+    if specified_modes - {'grabbed', 'ungrabbed'}:
+        log_error(f'Mouse modes: {modes} not recognized, ignoring')
+        return
+    try:
+        paction = parse_key_action(action)
+    except Exception:
+        log_error(f'Invalid mouse action: {action}. Ignoring.')
+        return
+    if paction is None:
+        log_error(f'Ignoring unknown mouse action: {action}')
+        return
+    for mode in specified_modes:
+        mouse_mappings.append(MouseMapping(button, mods, count, mode == 'grabbed', paction))
 
 
 def parse_symbol_map(val: str) -> Dict[Tuple[int, int], str]:
@@ -500,6 +582,11 @@ def deprecated_handler(*names: str) -> Callable[[SpecialHandlerFunc], SpecialHan
 @special_handler
 def handle_map(key: str, val: str, ans: Dict[str, Any]) -> None:
     parse_key(val, ans['key_definitions'])
+
+
+@special_handler
+def handle_mouse_map(key: str, val: str, ans: Dict[str, Any]) -> None:
+    parse_mouse_action(val, ans['mouse_mappings'])
 
 
 @special_handler
@@ -596,7 +683,8 @@ def option_names_for_completion() -> Generator[str, None, None]:
 def parse_config(lines: Iterable[str], check_keys: bool = True, accumulate_bad_lines: Optional[List[BadLine]] = None) -> Dict[str, Any]:
     ans: Dict[str, Any] = {
         'symbol_map': {}, 'keymap': {}, 'sequence_map': {}, 'key_definitions': [],
-        'env': {}, 'kitten_aliases': {}, 'font_features': {}
+        'env': {}, 'kitten_aliases': {}, 'font_features': {}, 'mouse_mappings': [],
+        'mousemap': {}
     }
     defs: Optional[OptionsStub] = None
     if check_keys:
@@ -615,8 +703,7 @@ def parse_config(lines: Iterable[str], check_keys: bool = True, accumulate_bad_l
 
 
 def parse_defaults(lines: Iterable[str], check_keys: bool = False) -> Dict[str, Any]:
-    ans = parse_config(lines, check_keys)
-    return ans
+    return parse_config(lines, check_keys)
 
 
 xc = init_config(config_lines(all_options), parse_defaults)
@@ -635,8 +722,8 @@ def merge_configs(defaults: Dict, vals: Dict) -> Dict:
         if isinstance(v, dict):
             newvals = vals.get(k, {})
             ans[k] = merge_dicts(v, newvals)
-        elif k == 'key_definitions':
-            ans['key_definitions'] = v + vals.get('key_definitions', [])
+        elif k in ('key_definitions', 'mouse_mappings'):
+            ans[k] = v + vals.get(k, [])
         else:
             ans[k] = vals.get(k, v)
     return ans
@@ -748,12 +835,40 @@ def finalize_keys(opts: OptionsStub) -> None:
     opts.sequence_map = sequence_map
 
 
+def finalize_mouse_mappings(opts: OptionsStub) -> None:
+    defns: List[MouseMapping] = []
+    for d in getattr(opts, 'mouse_mappings'):
+        if d is None:  # clear_all_shortcuts
+            defns = []
+        else:
+            defns.append(d)
+    kitten_aliases: List[Dict[str, Sequence[str]]] = getattr(opts, 'kitten_aliases')
+    for d in defns:
+        d.resolve(opts.kitty_mod)
+        if kitten_aliases and d.action.func == 'kitten':
+            d.resolve_kitten_aliases(kitten_aliases)
+
+    mousemap: MouseMap = {}
+    for defn in defns:
+        is_no_op = defn.action.func in no_op_actions
+        if is_no_op:
+            mousemap.pop(defn.trigger, None)
+        else:
+            mousemap[defn.trigger] = defn.action
+    opts.mousemap = mousemap
+
+
 def load_config(*paths: str, overrides: Optional[Iterable[str]] = None, accumulate_bad_lines: Optional[List[BadLine]] = None) -> OptionsStub:
     parser = parse_config
     if accumulate_bad_lines is not None:
         parser = partial(parse_config, accumulate_bad_lines=accumulate_bad_lines)
     opts = _load_config(Options, defaults, parser, merge_configs, *paths, overrides=overrides)
     finalize_keys(opts)
+    finalize_mouse_mappings(opts)
+    # delete no longer needed definitions, replacing with empty placeholders
+    setattr(opts, 'kitten_aliases', {})
+    setattr(opts, 'mouse_mappings', [])
+    setattr(opts, 'key_definitions', [])
     if opts.background_opacity < 1.0 and opts.macos_titlebar_color:
         log_error('Cannot use both macos_titlebar_color and background_opacity')
         opts.macos_titlebar_color = 0

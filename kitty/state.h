@@ -27,9 +27,6 @@ typedef struct {
     CursorShape cursor_shape;
     float cursor_beam_thickness;
     float cursor_underline_thickness;
-    unsigned int open_url_modifiers;
-    unsigned int rectangle_select_modifiers;
-    unsigned int terminal_select_modifiers;
     unsigned int url_style;
     unsigned int scrollback_pager_history_size;
     bool scrollback_fill_enlarged_window;
@@ -114,7 +111,7 @@ typedef struct {
         unsigned int left, top, right, bottom;
     } padding;
     WindowGeometry geometry;
-    ClickQueue click_queue;
+    ClickQueue click_queues[8];
     monotonic_t last_drag_scroll_at;
     uint32_t last_special_key_pressed;
 } Window;
@@ -210,6 +207,7 @@ typedef struct {
     double font_sz_in_pts;
     struct { double x, y; } default_dpi;
     id_type active_drag_in_window;
+    int active_drag_button;
     CloseRequest quit_request;
 } GlobalState;
 
@@ -292,3 +290,6 @@ void set_os_window_title_from_window(Window *w, OSWindow *os_window);
 void update_os_window_title(OSWindow *os_window);
 void fake_scroll(Window *w, int amount, bool upwards);
 Window* window_for_window_id(id_type kitty_window_id);
+void mouse_open_url(Window *w);
+void mouse_selection(Window *w, int code, int button);
+const char* format_mods(unsigned mods);

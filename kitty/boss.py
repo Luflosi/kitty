@@ -15,7 +15,7 @@ from typing import (
 )
 from weakref import WeakValueDictionary
 
-from .child import cached_process_data, cwd_of_process
+from .child import cached_process_data, cwd_of_process, default_env
 from .cli import create_opts, parse_args
 from .cli_stub import CLIOptions
 from .conf.utils import BadLine, to_cmdline
@@ -436,6 +436,7 @@ class Boss:
                         mark_os_window_for_close(src_tab.os_window_id)
 
     def on_child_death(self, window_id: int) -> None:
+        prev_active_window = self.active_window
         window = self.window_id_map.pop(window_id, None)
         if window is None:
             return
@@ -464,6 +465,12 @@ class Boss:
                 import traceback
                 traceback.print_exc()
         window.action_on_close = window.action_on_removal = None
+        window = self.active_window
+        if window is not prev_active_window:
+            if prev_active_window is not None:
+                prev_active_window.focus_changed(False)
+            if window is not None:
+                window.focus_changed(True)
 
     def close_window(self, window: Optional[Window] = None) -> None:
         window = window or self.active_window
@@ -729,27 +736,37 @@ class Boss:
                 if t is not None:
                     t.relayout_borders()
 
-    def dispatch_action(self, key_action: KeyAction) -> bool:
+    def dispatch_action(
+        self,
+        key_action: KeyAction,
+        window_for_dispatch: Optional[Window] = None,
+        dispatch_type: str = 'KeyPress'
+    ) -> bool:
+
+        def report_match(f: Callable) -> None:
+            if self.args.debug_keyboard:
+                print(f'\x1b[35m{dispatch_type}\x1b[m matched action:', func_name(f), flush=True)
+
         if key_action is not None:
             f = getattr(self, key_action.func, None)
             if f is not None:
-                if self.args.debug_keyboard:
-                    print('Keypress matched action:', func_name(f))
+                report_match(f)
                 passthrough = f(*key_action.args)
                 if passthrough is not True:
                     return True
-        tab = self.active_tab
-        if tab is None:
-            return False
-        window = self.active_window
-        if window is None:
+        if window_for_dispatch is None:
+            tab = self.active_tab
+            window = self.active_window
+        else:
+            window = window_for_dispatch
+            tab = window.tabref()
+        if tab is None or window is None:
             return False
         if key_action is not None:
             f = getattr(tab, key_action.func, getattr(window, key_action.func, None))
             if f is not None:
                 passthrough = f(*key_action.args)
-                if self.args.debug_keyboard:
-                    print('Keypress matched action:', func_name(f))
+                report_match(f)
                 if passthrough is not True:
                     return True
         return False
@@ -766,6 +783,12 @@ class Boss:
                 w.focus_changed(focused)
                 if is_macos and focused:
                     cocoa_set_menubar_title(w.title or '')
+            tm.mark_tab_bar_dirty()
+
+    def on_activity_since_last_focus(self, window: Window) -> None:
+        os_window_id = window.os_window_id
+        tm = self.os_window_map.get(os_window_id)
+        if tm is not None:
             tm.mark_tab_bar_dirty()
 
     def update_tab_bar_data(self, os_window_id: int) -> None:
@@ -1089,8 +1112,14 @@ class Boss:
         text = get_clipboard_string()
         self.paste_to_active_window(text)
 
+    def current_primary_selection(self) -> str:
+        return get_primary_selection() if supports_primary_selection else ''
+
+    def current_primary_selection_or_clipboard(self) -> str:
+        return get_primary_selection() if supports_primary_selection else get_clipboard_string()
+
     def paste_from_selection(self) -> None:
-        text = get_primary_selection() if supports_primary_selection else get_clipboard_string()
+        text = self.current_primary_selection_or_clipboard()
         self.paste_to_active_window(text)
 
     def set_primary_selection(self) -> None:
@@ -1147,7 +1176,10 @@ class Boss:
 
     prev_tab = previous_tab
 
-    def process_stdin_source(self, window: Optional[Window] = None, stdin: Optional[str] = None) -> Tuple[Optional[Dict[str, str]], Optional[bytes]]:
+    def process_stdin_source(
+        self, window: Optional[Window] = None,
+        stdin: Optional[str] = None, copy_pipe_data: Optional[Dict] = None
+    ) -> Tuple[Optional[Dict[str, str]], Optional[bytes]]:
         w = window or self.active_window
         if not w:
             return None, None
@@ -1161,6 +1193,8 @@ class Boss:
             if stdin is not None:
                 pipe_data = w.pipe_data(stdin, has_wrap_markers=add_wrap_markers) if w else None
                 if pipe_data:
+                    if copy_pipe_data is not None:
+                        copy_pipe_data.update(pipe_data)
                     env = {
                         'KITTY_PIPE_DATA':
                         '{scrolled_by}:{cursor_x},{cursor_y}:{lines},{columns}'.format(**pipe_data)
@@ -1203,6 +1237,11 @@ class Boss:
         cwd_from: Optional[int] = None
     ) -> None:
         import subprocess
+        env = env or None
+        if env:
+            env_ = default_env().copy()
+            env_.update(env)
+            env = env_
         if cwd_from:
             with suppress(Exception):
                 cwd = cwd_of_process(cwd_from)

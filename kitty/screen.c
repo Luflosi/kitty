@@ -571,6 +571,7 @@ screen_draw(Screen *self, uint32_t och, bool from_input_stream) {
     if (is_ignored_char(och)) return;
     if (!self->has_activity_since_last_focus && !self->has_focus) {
         self->has_activity_since_last_focus = true;
+        CALLBACK("on_activity_since_last_focus", NULL);
     }
     uint32_t ch = och < 256 ? self->g_charset[och] : och;
     bool is_cc = is_combining_char(ch);
@@ -1139,9 +1140,12 @@ screen_reverse_index(Screen *self) {
 static void
 _reverse_scroll(Screen *self, unsigned int count, bool fill_from_scrollback) {
     // Scroll the screen down by count lines, not moving the cursor
-    count = MIN(self->lines, count);
     unsigned int top = self->margin_top, bottom = self->margin_bottom;
     fill_from_scrollback = fill_from_scrollback && self->linebuf == self->main_linebuf;
+    if (fill_from_scrollback) {
+        unsigned limit = MAX(self->lines, self->historybuf->count);
+        count = MIN(limit, count);
+    } else count = MIN(self->lines, count);
     while (count-- > 0) {
         bool copied = false;
         if (fill_from_scrollback) copied = historybuf_pop_line(self->historybuf, self->alt_linebuf->line);
@@ -2112,6 +2116,7 @@ deactivate_overlay_line(Screen *self) {
 #define WRAP2B(name) static PyObject* name(Screen *self, PyObject *args) { unsigned int a, b; int p; if(!PyArg_ParseTuple(args, "IIp", &a, &b, &p)) return NULL; screen_##name(self, a, b, (bool)p); Py_RETURN_NONE; }
 
 WRAP0(garbage_collect_hyperlink_pool)
+WRAP0x(has_selection)
 
 static PyObject*
 hyperlinks_as_list(Screen *self, PyObject *args UNUSED) {
@@ -2670,6 +2675,7 @@ screen_update_selection(Screen *self, index_type x, index_type y, bool in_left_h
             if (found_at_end) { b->x = end.x; b->y = end.y; b->in_left_half_of_cell = false; }
             break;
         }
+        case EXTEND_LINE_FROM_POINT:
         case EXTEND_LINE: {
             index_type top_line, bottom_line;
             if (start_extended_selection || y == s->start.y) {
@@ -2690,7 +2696,11 @@ screen_update_selection(Screen *self, index_type x, index_type y, bool in_left_h
             }
             if (screen_selection_range_for_line(self, top_line, &start.x, &start.y) && screen_selection_range_for_line(self, bottom_line, &end.x, &end.y)) {
                 bool multiline = top_line != bottom_line;
-                a->x = multiline ? 0 : start.x; a->y = top_line; a->in_left_half_of_cell = true;
+                if (!multiline && self->selections.extend_mode == EXTEND_LINE_FROM_POINT) {
+                    if (x > end.y) break;
+                    a->x = x;
+                } else a->x = multiline ? 0 : start.x;
+                a->y = top_line; a->in_left_half_of_cell = true;
                 b->x = end.y; b->y = bottom_line; b->in_left_half_of_cell = false;
             }
             break;
@@ -2946,6 +2956,7 @@ static PyMethodDef methods[] = {
     MND(cursor_down1, METH_VARARGS)
     MND(cursor_forward, METH_VARARGS)
     {"index", (PyCFunction)xxx_index, METH_VARARGS, ""},
+    {"has_selection", (PyCFunction)xxx_has_selection, METH_VARARGS, ""},
     MND(set_pending_timeout, METH_O)
     MND(as_text, METH_VARARGS)
     MND(as_text_non_visual, METH_VARARGS)
