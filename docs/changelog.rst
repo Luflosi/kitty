@@ -25,11 +25,11 @@ To update |kitty|, :doc:`follow the instructions <binary>`.
 - Add a configurable mouse action to select from the clicked point to the end of the line.
   (:iss:`3585`)
 
-- Add the ability to unscroll the screen to the ``kitty @ scroll-window``
+- Add the ability to un-scroll the screen to the ``kitty @ scroll-window``
   remote control command (:iss:`3604`)
 
 - Unicode input kitten: Fix a regression in 0.20.0 that broke keyboard handling
-  when the num lock or caps lock modifiers were engaged. (:iss:`3587`)
+  when the NumLock or CapsLock modifiers were engaged. (:iss:`3587`)
 
 - Fix a regression in 0.20.0 that sent incorrect bytes for the :kbd:`F1-F4` keys
   in rmkx mode (:iss:`3586`)
@@ -49,6 +49,21 @@ To update |kitty|, :doc:`follow the instructions <binary>`.
 
 - Fix passing STDIN to launched background processes causing them to not inherit
   environment variables (:pull:`3603`)
+
+- Fix deleting windows that are not the last window via remote control leaving
+  no window focused (:iss:`3619`)
+
+- Add an option :option:`kitty @ get-text --add-cursor` to also get the current
+  cursor position and state as ANSI escape codes (:iss:`3625`)
+
+- Add an option :option:`kitty @ get-text --add-wrap-markers` to add line wrap
+  markers to the output (:pull:`3633`)
+
+- Improve rendering of curly underlines on HiDPI screens (:pull:`3637`)
+
+- ssh kitten: Mimic behavior of ssh command line client more closely by
+  executing any command specified on the command line via the users' shell
+  just as ssh does (:iss:`3638`)
 
 
 0.20.3 [2021-05-06]

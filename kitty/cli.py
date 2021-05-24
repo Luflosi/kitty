@@ -587,7 +587,7 @@ Override individual configuration options, can be specified multiple times.
 Syntax: :italic:`name=value`. For example: :option:`kitty -o` font_size=20
 
 
---directory -d
+--directory --working-directory -d
 default=.
 Change to the specified directory when launching
 
@@ -703,7 +703,9 @@ Print out information about the selection of fallback fonts for characters not p
 
 --debug-config
 type=bool-set
-Print out information about the system and kitty configuration.
+Print out information about the system and kitty configuration. Note that this only
+reads the standard kitty.conf not any extra configuration or alternative conf files
+that were specified on the command line.
 
 
 --execute -e

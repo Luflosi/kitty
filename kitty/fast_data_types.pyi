@@ -236,6 +236,7 @@ GLFW_RELEASE: int
 GLFW_REPEAT: int
 CURSOR_BEAM: int
 CURSOR_BLOCK: int
+NO_CURSOR_SHAPE: int
 CURSOR_UNDERLINE: int
 DECAWM: int
 BGIMAGE_PROGRAM: int
@@ -924,6 +925,8 @@ class Cursor:
     fg: int
     bold: bool
     italic: bool
+    blink: bool
+    shape: int
 
 
 class Screen:
@@ -935,6 +938,7 @@ class Screen:
     historybuf: HistoryBuf
     linebuf: LineBuf
     in_bracketed_paste_mode: bool
+    cursor_visible: bool
     scrolled_by: int
     cursor: Cursor
     disable_ligatures: int

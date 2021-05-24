@@ -374,6 +374,10 @@ class Layout:
     def compute_needs_borders_map(self, all_windows: WindowList) -> Dict[int, bool]:
         return all_windows.compute_needs_borders_map(lgd.draw_active_borders)
 
+    def get_minimal_borders(self, windows: WindowList) -> Generator[BorderLine, None, None]:
+        self._set_dimensions()
+        yield from self.minimal_borders(windows)
+
     def minimal_borders(self, windows: WindowList) -> Generator[BorderLine, None, None]:
         return
         yield BorderLine()  # type: ignore
