@@ -146,7 +146,7 @@ get_dock_menu(id self UNUSED, SEL _cmd UNUSED, NSApplication *sender UNUSED) {
     if (!dockMenu) {
         GlobalMenuTarget *global_menu_target = [GlobalMenuTarget shared_instance];
         dockMenu = [[NSMenu alloc] init];
-        [[dockMenu addItemWithTitle:@"New window"
+        [[dockMenu addItemWithTitle:@"New Window"
                              action:@selector(new_os_window:)
                       keyEquivalent:@""]
                           setTarget:global_menu_target];
@@ -417,7 +417,7 @@ cocoa_create_global_menu(void) {
     NSMenu* fileMenu = [[NSMenu alloc] initWithTitle:@"File"];
     [fileMenuItem setSubmenu:fileMenu];
 
-    MENU_ITEM(fileMenu, @"New window", new_os_window);
+    MENU_ITEM(fileMenu, @"New Window", new_os_window);
 
     [fileMenu release];
 
