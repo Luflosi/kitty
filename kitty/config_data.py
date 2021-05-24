@@ -6,14 +6,14 @@
 import os
 from gettext import gettext as _
 from typing import (
-    Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set,
+    Callable, Dict, FrozenSet, Iterable, List, Optional, Set,
     Tuple, TypeVar, Union
 )
 
 from . import fast_data_types as defines
-from .conf.definition import Option, OptionOrAction, option_func
+from .conf.definition import OptionOrAction, option_func
 from .conf.utils import (
-    choices, to_bool, to_cmdline as tc, to_color, to_color_or_none, unit_float
+    choices, to_bool, to_cmdline, to_color, to_color_or_none, unit_float
 )
 from .constants import config_dir, is_macos
 from .fast_data_types import CURSOR_BEAM, CURSOR_BLOCK, CURSOR_UNDERLINE
@@ -37,10 +37,6 @@ mod_map = {'CTRL': 'CONTROL', 'CMD': 'SUPER', '⌘': 'SUPER',
 character_key_name_aliases_with_ascii_lowercase = character_key_name_aliases.copy()
 for x in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
     character_key_name_aliases_with_ascii_lowercase[x] = x.lower()
-
-
-def to_cmdline(x: str) -> List[str]:
-    return tc(x)
 
 
 def parse_mods(parts: Iterable[str], sc: str) -> Optional[int]:
@@ -157,7 +153,9 @@ number ``b1 ... b8`` can be used to refer to upto eight buttons on a mouse.
 ``event-type`` is one ``press``, ``release``, ``doublepress``, ``triplepress``,
 ``click`` and ``doubleclick``.  ``modes`` indicates whether the action is
 performed when the mouse is grabbed by the terminal application or not. It can
-have one or more or the values, ``grabbed,ungrabbed``.
+have one or more or the values, ``grabbed,ungrabbed``. Note that the click
+and double click events have a delay of :opt:`click_interval` to disambiguate
+from double and triple presses.
 
 You can run kitty with the :option:`kitty --debug-input` command line option
 to see mouse events. See the builtin actions below to get a sense of what is possible.
@@ -683,11 +681,9 @@ for grabbed in (False, True):
     m('start_rectangle_selection' + name_s, mods_p + 'ctrl+alt+left', 'press', modes, 'mouse_selection rectangle',
       _('Start selecting text in a rectangle') + ts)
     m('select_word' + name_s, mods_p + 'left', 'doublepress', modes, 'mouse_selection word', _('Select a word') + ts)
-    line_desc = ''
-    if not grabbed:
-        line_desc = _('Select the entire line. If you would rather select from the clicked'
-                      ' point to the end of the line, use ``line_at_point`` instead of ``line`` above')
-    m('select_line' + name_s, mods_p + 'left', 'triplepress', modes, 'mouse_selection line', _('Select a line') + ts, line_desc)
+    m('select_line' + name_s, mods_p + 'left', 'triplepress', modes, 'mouse_selection line', _('Select a line') + ts, _('Select the entire line'))
+    m('select_line_from_point' + name_s, mods_p + 'ctrl+alt+left', 'triplepress', modes,
+      'mouse_selection line_from_point', _('Select line from point') + ts, _('Select from the clicked point to the end of the line'))
     m('extend_selection' + name_s, mods_p + 'right', 'press', modes, 'mouse_selection extend', _('Extend the current selection') + ts)
 # }}}
 
@@ -1397,7 +1393,6 @@ automatically. Set it to :code:`x11` or :code:`wayland`
 to force the choice.'''))
 # }}}
 
-
 g('shortcuts')  # {{{
 
 o('kitty_mod', 'ctrl+shift', option_type=to_modifiers, long_text=_('''
@@ -1687,10 +1682,3 @@ the line (same as pressing the Home key)::
 '''))
 # }}}
 # }}}
-
-
-def type_convert(name: str, val: Any) -> Any:
-    o = all_options.get(name)
-    if isinstance(o, Option):
-        val = o.option_type(val)
-    return val
