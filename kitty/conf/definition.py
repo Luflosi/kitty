@@ -12,10 +12,6 @@ from typing import (
 from .utils import Choice, to_bool
 
 
-def to_string(x: str) -> str:
-    return x
-
-
 class Group:
 
     __slots__ = 'name', 'short_text', 'start_text', 'end_text'
@@ -27,24 +23,23 @@ class Group:
 
 class Option:
 
-    __slots__ = 'name', 'group', 'long_text', 'option_type', 'defval_as_string', 'add_to_default', 'add_to_docs', 'line'
+    __slots__ = 'name', 'group', 'long_text', 'option_type', 'defval_as_string', 'add_to_default', 'add_to_docs', 'line', 'is_multiple'
 
-    def __init__(self, name: str, group: Group, defval: str, option_type: Any, long_text: str, add_to_default: bool, add_to_docs: bool):
+    def __init__(self, name: str, group: Group, defval: str, option_type: Any, long_text: str, add_to_default: bool, add_to_docs: bool, is_multiple: bool):
         self.name, self.group = name, group
         self.long_text, self.option_type = long_text.strip(), option_type
         self.defval_as_string = defval
         self.add_to_default = add_to_default
         self.add_to_docs = add_to_docs
+        self.is_multiple = is_multiple
         self.line = self.name + ' ' + self.defval_as_string
 
-    def type_definition(self, is_multiple: bool, imports: Set[Tuple[str, str]]) -> str:
+    def type_definition(self, imports: Set[Tuple[str, str]]) -> str:
 
         def type_name(x: type) -> str:
             ans = x.__name__
             if x.__module__ and x.__module__ != 'builtins':
                 imports.add((x.__module__, x.__name__))
-            if is_multiple:
-                ans = 'typing.Dict[str, str]'
             return ans
 
         def option_type_as_str(x: Any) -> str:
@@ -52,6 +47,9 @@ class Option:
                 return type_name(x)
             ans = repr(x)
             ans = ans.replace('NoneType', 'None')
+            if self.is_multiple:
+                ans = ans[ans.index('[') + 1:-1]
+                ans = ans.replace('Tuple', 'Dict', 1)
             return ans
 
         if type(self.option_type) is type:
@@ -104,7 +102,7 @@ def option(
     name: str,
     defval: Any,
     long_text: str = '',
-    option_type: Callable[[str], Any] = to_string,
+    option_type: Callable[[str], Any] = str,
     add_to_default: bool = True,
     add_to_docs: bool = True
 ) -> Option:
@@ -113,7 +111,7 @@ def option(
         name = name[1:]
     defval_type = type(defval)
     if defval_type is not str:
-        if option_type is to_string:
+        if option_type is str:
             if defval_type is bool:
                 option_type = to_bool
             else:
@@ -123,11 +121,8 @@ def option(
         else:
             defval = str(defval)
 
-    key = name
-    if is_multiple:
-        key = name + ' ' + defval.partition(' ')[0]
-    ans = Option(name, group[0], defval, option_type, long_text, add_to_default, add_to_docs)
-    all_options[key] = ans
+    ans = Option(name, group[0], defval, option_type, long_text, add_to_default, add_to_docs, is_multiple)
+    all_options[name] = ans
     return ans
 
 
@@ -178,7 +173,7 @@ def option_func(all_options: Dict[str, Any], all_groups: Dict[str, Sequence[str]
     return partial(option, all_options, group), partial(shortcut, all_options, group), partial(mouse_action, all_options, group), change_group, all_groups_
 
 
-OptionOrAction = Union[Option, Sequence[Shortcut], Sequence[MouseAction]]
+OptionOrAction = Union[Option, List[Union[Shortcut, MouseAction]]]
 
 
 def merged_opts(all_options: Sequence[OptionOrAction], opt: Option, i: int) -> Generator[Option, None, None]:
@@ -360,19 +355,16 @@ def config_lines(
 
 def as_type_stub(
     all_options: Dict[str, OptionOrAction],
-    special_types: Optional[Dict[str, str]] = None,
     preamble_lines: Union[Tuple[str, ...], List[str], Iterable[str]] = (),
     extra_fields: Union[Tuple[Tuple[str, str], ...], List[Tuple[str, str]], Iterable[Tuple[str, str]]] = (),
     class_name: str = 'Options'
 ) -> str:
     ans = ['import typing\n'] + list(preamble_lines) + ['', 'class {}:'.format(class_name)]
     imports: Set[Tuple[str, str]] = set()
-    overrides = special_types or {}
     for name, val in all_options.items():
         if isinstance(val, Option):
-            is_multiple = ' ' in name
             field_name = name.partition(' ')[0]
-            ans.append('    {}: {}'.format(field_name, overrides.get(field_name, val.type_definition(is_multiple, imports))))
+            ans.append('    {}: {}'.format(field_name, val.type_definition(imports)))
     for mod, name in imports:
         ans.insert(0, 'from {} import {}'.format(mod, name))
         ans.insert(0, 'import {}'.format(mod))

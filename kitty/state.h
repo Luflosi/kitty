@@ -272,7 +272,9 @@ typedef enum {
     PREVIOUS_TAB = 256,
     DETACH_TAB = 512,
     OPEN_FILE = 1024,
-    PASTE = 2048,
+    NEW_WINDOW = 2048,
+    CLOSE_WINDOW = 4096,
+    PASTE = 8192,
 } CocoaPendingAction;
 void set_cocoa_pending_action(CocoaPendingAction action, const char*);
 #endif
