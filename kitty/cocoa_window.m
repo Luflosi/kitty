@@ -482,7 +482,7 @@ cocoa_create_global_menu(void) {
     [[windowMenu addItemWithTitle:@"Move Tab to New Window"
                            action:@selector(detach_tab:)
                     keyEquivalent:@""] setTarget:global_menu_target];
-
+    [NSApp setWindowsMenu:windowMenu];
     [windowMenu release];
 
     NSMenuItem* helpMenuItem =
