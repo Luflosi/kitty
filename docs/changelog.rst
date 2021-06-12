@@ -4,8 +4,11 @@ Changelog
 |kitty| is a feature-rich, cross-platform, *fast*, GPU based terminal.
 To update |kitty|, :doc:`follow the instructions <binary>`.
 
-0.21.0 [future]
+0.21.0 [2021-06-12]
 ----------------------
+
+- Allow reloading the :file:`kitty.conf` config file by pressing
+  :sc:`reload_config_file`. (:iss:`1292`)
 
 - Allow clicking URLs to open them without needing to also hold
   :kbd:`ctrl+shift`
@@ -28,6 +31,9 @@ To update |kitty|, :doc:`follow the instructions <binary>`.
 - Add the ability to un-scroll the screen to the ``kitty @ scroll-window``
   remote control command (:iss:`3604`)
 
+- A new option, :opt:`tab_bar_margin_height` to add margins around the
+  top and bottom edges of the tab bar (:iss:`3247`)
+
 - Unicode input kitten: Fix a regression in 0.20.0 that broke keyboard handling
   when the NumLock or CapsLock modifiers were engaged. (:iss:`3587`)
 
@@ -42,6 +48,9 @@ To update |kitty|, :doc:`follow the instructions <binary>`.
 
 - macOS: Add a new ``Shell`` menu to the global menubar with some commonly used
   actions (:pull:`3653`)
+
+- macOS: Fix the baseline for text not matching other CoreText based
+  applications for some fonts (:iss:`2022`)
 
 - Add a few more special commandline arguments for the launch command. Now all
   ``KITTY_PIPE_DATA`` is also available via command line argument substitution
@@ -67,6 +76,25 @@ To update |kitty|, :doc:`follow the instructions <binary>`.
 - ssh kitten: Mimic behavior of ssh command line client more closely by
   executing any command specified on the command line via the users' shell
   just as ssh does (:iss:`3638`)
+
+- Fix trailing parentheses in URLs not being detected (:iss:`3688`)
+
+- Tab bar: Use a lower contrast color for tab separators (:pull:`3666`)
+
+- Fix a regression that caused using the ``title`` command in session files
+  to stop working (:iss:`3676`)
+
+- macOS: Fix a rare crash on exit (:iss:`3686`)
+
+- Fix ligatures not working with the `Iosevka
+  <https://github.com/be5invis/Iosevka>`_ font (requires Iosevka >= 7.0.4)
+  (:iss:`297`)
+
+- Remote control: Allow matching tabs by index number in currently active OS
+  Window (:iss:`3708`)
+
+- ssh kitten: Fix non-standard properties in terminfo such as the ones used for
+  true color not being copied (:iss:`312`)
 
 
 0.20.3 [2021-05-06]
@@ -853,7 +881,7 @@ To update |kitty|, :doc:`follow the instructions <binary>`.
 - macOS: Add a :code:`titlebar-only` setting to
   :opt:`hide_window_decorations` to only hide the title bar (:pull:`2286`)
 
-- Fix a segfault when using :option:`kitty --debug-config` with maps (:iss:`2270`)
+- Fix a segfault when using ``--debug-config`` with maps (:iss:`2270`)
 
 - ``goto_tab`` now maps numbers larger than the last tab to the last tab
   (:iss:`2291`)
@@ -1729,8 +1757,8 @@ To update |kitty|, :doc:`follow the instructions <binary>`.
 
 - Support "-T" as an alias for "--title" (:pull:`659`)
 
-- Fix a regression in the previous release that broke using :option:`kitty
-  --debug-config` with custom key mappings (:iss:`695`)
+- Fix a regression in the previous release that broke using
+  ``--debug-config`` with custom key mappings (:iss:`695`)
 
 
 0.11.1 [2018-06-17]

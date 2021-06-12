@@ -7,7 +7,7 @@ import os
 import shutil
 import sys
 from contextlib import contextmanager, suppress
-from typing import Dict, Generator, List, Optional, Sequence
+from typing import Dict, Generator, List, Optional, Sequence, Tuple
 
 from .borders import load_borders_program
 from .boss import Boss
@@ -27,7 +27,7 @@ from .fast_data_types import (
 )
 from .fonts.box_drawing import set_scale
 from .fonts.render import set_font_family
-from .options_stub import Options as OptionsStub
+from .options.types import Options
 from .os_window_size import initial_window_size_func
 from .session import get_os_window_sizing_data
 from .types import SingleKey
@@ -98,17 +98,17 @@ def init_glfw_module(glfw_module: str, debug_keyboard: bool = False, debug_rende
         raise SystemExit('GLFW initialization failed')
 
 
-def init_glfw(opts: OptionsStub, debug_keyboard: bool = False, debug_rendering: bool = False) -> str:
+def init_glfw(opts: Options, debug_keyboard: bool = False, debug_rendering: bool = False) -> str:
     glfw_module = 'cocoa' if is_macos else ('wayland' if is_wayland(opts) else 'x11')
     init_glfw_module(glfw_module, debug_keyboard, debug_rendering)
     return glfw_module
 
 
-def get_macos_shortcut_for(opts: OptionsStub, function: str = 'new_os_window') -> Optional[SingleKey]:
+def get_macos_shortcut_for(opts: Options, function: str = 'new_os_window', args: Tuple = (), lookup_name: str = '') -> Optional[SingleKey]:
     ans = None
     candidates = []
     for k, v in opts.keymap.items():
-        if v.func == function:
+        if v.func == function and v.args == args:
             candidates.append(k)
     if candidates:
         from .fast_data_types import cocoa_set_global_shortcut
@@ -120,7 +120,7 @@ def get_macos_shortcut_for(opts: OptionsStub, function: str = 'new_os_window') -
                 # presumably because Apple reserves them for IME, see
                 # https://github.com/kovidgoyal/kitty/issues/3515
                 continue
-            if cocoa_set_global_shortcut(function, candidate[0], candidate[2]):
+            if cocoa_set_global_shortcut(lookup_name or function, candidate[0], candidate[2]):
                 ans = candidate
                 break
     return ans
@@ -132,7 +132,7 @@ def set_x11_window_icon() -> None:
     set_default_window_icon(path + '-128' + ext)
 
 
-def _run_app(opts: OptionsStub, args: CLIOptions, bad_lines: Sequence[BadLine] = ()) -> None:
+def _run_app(opts: Options, args: CLIOptions, bad_lines: Sequence[BadLine] = ()) -> None:
     global_shortcuts: Dict[str, SingleKey] = {}
     if is_macos:
         for ac in ('new_os_window', 'close_os_window', 'close_tab', 'edit_config_file', 'previous_tab',
@@ -140,6 +140,9 @@ def _run_app(opts: OptionsStub, args: CLIOptions, bad_lines: Sequence[BadLine] =
             val = get_macos_shortcut_for(opts, ac)
             if val is not None:
                 global_shortcuts[ac] = val
+        val = get_macos_shortcut_for(opts, 'clear_terminal', args=('reset', True), lookup_name='reset_terminal')
+        if val is not None:
+            global_shortcuts['reset_terminal'] = val
     if is_macos and opts.macos_custom_beam_cursor:
         set_custom_ibeam_cursor()
     if not is_wayland() and not is_macos:  # no window icons on wayland
@@ -169,7 +172,7 @@ class AppRunner:
         self.first_window_callback = lambda window_handle: None
         self.initial_window_size_func = initial_window_size_func
 
-    def __call__(self, opts: OptionsStub, args: CLIOptions, bad_lines: Sequence[BadLine] = ()) -> None:
+    def __call__(self, opts: Options, args: CLIOptions, bad_lines: Sequence[BadLine] = ()) -> None:
         set_scale(opts.box_drawing_scale)
         set_options(opts, is_wayland(), args.debug_rendering, args.debug_font_fallback)
         try:
@@ -178,6 +181,9 @@ class AppRunner:
         finally:
             set_options(None)
             free_font_data()  # must free font data before glfw/freetype/fontconfig/opengl etc are finalized
+            if is_macos:
+                from kitty.fast_data_types import cocoa_set_notification_activated_callback
+                cocoa_set_notification_activated_callback(None)
 
 
 run_app = AppRunner()
@@ -248,7 +254,7 @@ def expand_listen_on(listen_on: str, from_config_file: bool) -> str:
     return listen_on
 
 
-def setup_environment(opts: OptionsStub, cli_opts: CLIOptions) -> None:
+def setup_environment(opts: Options, cli_opts: CLIOptions) -> None:
     from_config_file = False
     if not cli_opts.listen_on and opts.listen_on.startswith('unix:'):
         cli_opts.listen_on = opts.listen_on
@@ -304,9 +310,6 @@ def _main() -> None:
         os.chdir(os.path.expanduser('~'))
     cli_opts, rest = parse_args(args=args, result_class=CLIOptions)
     cli_opts.args = rest
-    if cli_opts.debug_config:
-        create_opts(cli_opts, debug_config=True)
-        return
     if cli_opts.detach:
         if cli_opts.session == '-':
             from .session import PreReadSession

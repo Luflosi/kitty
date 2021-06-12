@@ -7,11 +7,15 @@ import importlib
 import os
 import sys
 from functools import partial
-from typing import Any, Dict, FrozenSet, List
+from typing import Any, Dict, FrozenSet, List, TYPE_CHECKING, cast
 
 from kitty.types import run_once
 
 aliases = {'url_hints': 'hints'}
+if TYPE_CHECKING:
+    from kitty.conf.types import Definition
+else:
+    Definition = object
 
 
 def resolved_kitten(k: str) -> str:
@@ -117,7 +121,7 @@ def run_kitten(kitten: str, run_name: str = '__main__') -> None:
         for kitten in all_kitten_names():
             print(kitten, file=sys.stderr)
         raise SystemExit('No kitten named {}'.format(original_kitten_name))
-    m = runpy.run_path(path, init_globals={'sys': sys, 'os': os}, run_name='__run_kitten__')  # type: ignore
+    m = runpy.run_path(path, init_globals={'sys': sys, 'os': os}, run_name='__run_kitten__')
     m['main'](sys.argv)
 
 
@@ -151,12 +155,12 @@ def get_kitten_cli_docs(kitten: str) -> Any:
         return ans
 
 
-def get_kitten_conf_docs(kitten: str) -> Any:
-    setattr(sys, 'all_options', None)
+def get_kitten_conf_docs(kitten: str) -> Definition:
+    setattr(sys, 'options_definition', None)
     run_kitten(kitten, run_name='__conf__')
-    ans = getattr(sys, 'all_options')
-    delattr(sys, 'all_options')
-    return ans
+    ans = getattr(sys, 'options_definition')
+    delattr(sys, 'options_definition')
+    return cast(Definition, ans)
 
 
 def main() -> None:

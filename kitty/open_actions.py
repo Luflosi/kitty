@@ -11,10 +11,10 @@ from typing import (
 )
 from urllib.parse import ParseResult, unquote, urlparse
 
-from .conf.utils import to_cmdline_implementation
-from .config import KeyAction, parse_key_action
+from .conf.utils import KeyAction, to_cmdline_implementation
 from .constants import config_dir
 from .guess_mime_type import guess_type
+from .options.utils import parse_key_action
 from .types import run_once
 from .typing import MatchType
 from .utils import expandvars, log_error

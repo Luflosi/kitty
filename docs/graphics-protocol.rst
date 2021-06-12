@@ -226,8 +226,12 @@ Value of `t`          Meaning
                       is in a known temporary directory, such as :file:`/tmp`,
                       :file:`/dev/shm`, :file:`TMPDIR env var if present` and any platform
                       specific temporary directories.
-``s``                 A `POSIX shared memory object <http://man7.org/linux/man-pages/man7/shm_overview.7.html>`_.
-                      The terminal emulator will delete it after reading the pixel data
+``s``                 A *shared memory object*, which on POSIX systems is a `POSIX shared memory object
+                      <http://man7.org/linux/man-pages/man7/shm_overview.7.html>`_ and on Windows is a
+                      `Named shared memory object <https://docs.microsoft.com/en-us/windows/win32/memory/creating-named-shared-memory>`_.
+                      The terminal emulator must read the data from the memory
+                      object and then unlink and close it on POSIX and just
+                      close it on Windows.
 ==================    ============
 
 Local client
@@ -312,7 +316,7 @@ While as of May 2020, kitty is the only terminal emulator to support this
 graphics protocol, we intend that any terminal emulator that wishes to support
 it can. To check if a terminal emulator supports the graphics protocol the best way
 is to send the above *query action* followed by a request for the
-`primary device attributes <https://vt100.net/docs/vt510-rm/DA1.html>`. If you
+`primary device attributes <https://vt100.net/docs/vt510-rm/DA1.html>`_. If you
 get back an answer for the device attributes without getting back an answer for
 the *query action* the terminal emulator does not support the graphics
 protocol.

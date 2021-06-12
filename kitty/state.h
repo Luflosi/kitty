@@ -71,6 +71,11 @@ typedef struct {
         size_t num, max_prefix_len;
     } url_prefixes;
     bool detect_urls;
+    bool tab_bar_hidden;
+    double font_size;
+    struct {
+        double outer, inner;
+    } tab_bar_margin_height;
 } Options;
 
 typedef struct {
@@ -202,9 +207,7 @@ typedef struct {
     bool debug_rendering, debug_font_fallback;
     bool has_pending_resizes, has_pending_closes;
     bool in_sequence_mode;
-    bool tab_bar_hidden;
     bool check_for_active_animated_images;
-    double font_sz_in_pts;
     struct { double x, y; } default_dpi;
     id_type active_drag_in_window;
     int active_drag_button;
@@ -274,7 +277,8 @@ typedef enum {
     OPEN_FILE = 1024,
     NEW_WINDOW = 2048,
     CLOSE_WINDOW = 4096,
-    PASTE = 8192,
+    RESET_TERMINAL = 8192,
+    PASTE = 16384,
 } CocoaPendingAction;
 void set_cocoa_pending_action(CocoaPendingAction action, const char*);
 #endif
@@ -297,3 +301,4 @@ void mouse_selection(Window *w, int code, int button);
 const char* format_mods(unsigned mods);
 void send_pending_click_to_window_id(id_type, void*);
 void send_pending_click_to_window(Window*, void*);
+void get_platform_dependent_config_values(void *glfw_window);

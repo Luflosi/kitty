@@ -7,10 +7,10 @@ import sys
 from typing import Generator, List, Optional, Sequence, Union
 
 from .cli_stub import CLIOptions
-from .options_types import to_layout_names, window_size
+from .options.utils import to_layout_names, window_size
 from .constants import kitty_exe
 from .layout.interface import all_layouts
-from .options_stub import Options
+from .options.types import Options
 from .os_window_size import WindowSize, WindowSizeData, WindowSizes
 from .typing import SpecialWindowInstance
 from .utils import log_error, resolved_shell
@@ -68,6 +68,8 @@ class Session:
         if self.default_watchers:
             spec.opts.watcher = list(spec.opts.watcher) + self.default_watchers
         t = self.tabs[-1]
+        if t.next_title and not spec.opts.window_title:
+            spec.opts.window_title = t.next_title
         spec.opts.cwd = spec.opts.cwd or t.cwd
         t.windows.append(spec)
         t.next_title = None

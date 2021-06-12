@@ -33,6 +33,18 @@ static void set_os_window_dpi(OSWindow *w);
 
 
 void
+get_platform_dependent_config_values(void *glfw_window) {
+    if (OPT(click_interval) < 0) OPT(click_interval) = glfwGetDoubleClickInterval(glfw_window);
+    if (OPT(cursor_blink_interval) < 0) {
+        OPT(cursor_blink_interval) = ms_to_monotonic_t(500ll);
+#ifdef __APPLE__
+        monotonic_t cbi = cocoa_cursor_blink_interval();
+        if (cbi >= 0) OPT(cursor_blink_interval) = cbi / 2;
+#endif
+    }
+}
+
+void
 request_tick_callback(void) {
     glfwPostEmptyEvent();
 }
@@ -653,7 +665,7 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
     float xscale, yscale;
     double xdpi, ydpi;
     get_window_content_scale(temp_window, &xscale, &yscale, &xdpi, &ydpi);
-    FONTS_DATA_HANDLE fonts_data = load_fonts_data(global_state.font_sz_in_pts, xdpi, ydpi);
+    FONTS_DATA_HANDLE fonts_data = load_fonts_data(OPT(font_size), xdpi, ydpi);
     PyObject *ret = PyObject_CallFunction(get_window_size, "IIddff", fonts_data->cell_width, fonts_data->cell_height, fonts_data->logical_dpi_x, fonts_data->logical_dpi_y, xscale, yscale);
     if (ret == NULL) return NULL;
     int width = PyLong_AsLong(PyTuple_GET_ITEM(ret, 0)), height = PyLong_AsLong(PyTuple_GET_ITEM(ret, 1));
@@ -693,7 +705,7 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
         if (n_xdpi != xdpi || n_ydpi != ydpi) {
             // this can happen if the window is moved by the OS to a different monitor when shown
             xdpi = n_xdpi; ydpi = n_ydpi;
-            fonts_data = load_fonts_data(global_state.font_sz_in_pts, xdpi, ydpi);
+            fonts_data = load_fonts_data(OPT(font_size), xdpi, ydpi);
         }
 #endif
     }
@@ -706,16 +718,9 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
         dest##_cursor = glfwCreateStandardCursor(GLFW_##shape##_CURSOR); \
         if (dest##_cursor == NULL) { log_error("Failed to create the %s mouse cursor, using default cursor.", #shape); } \
 }}
-    CC(standard, IBEAM); CC(click, HAND); CC(arrow, ARROW);
+        CC(standard, IBEAM); CC(click, HAND); CC(arrow, ARROW);
 #undef CC
-        if (OPT(click_interval) < 0) OPT(click_interval) = glfwGetDoubleClickInterval(glfw_window);
-        if (OPT(cursor_blink_interval) < 0) {
-            OPT(cursor_blink_interval) = ms_to_monotonic_t(500ll);
-#ifdef __APPLE__
-            monotonic_t cbi = cocoa_cursor_blink_interval();
-            if (cbi >= 0) OPT(cursor_blink_interval) = cbi / 2;
-#endif
-        }
+        get_platform_dependent_config_values(glfw_window);
         is_first_window = false;
     }
     OSWindow *w = add_os_window();
@@ -730,7 +735,7 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
     w->fonts_data = fonts_data;
     w->shown_once = true;
     w->last_focused_counter = ++focus_counter;
-    if (OPT(resize_in_steps)) os_window_update_size_increments(w);
+    os_window_update_size_increments(w);
 #ifdef __APPLE__
     if (OPT(macos_option_as_alt)) glfwSetCocoaTextInputFilter(glfw_window, filter_option);
     glfwSetCocoaToggleFullscreenIntercept(glfw_window, intercept_cocoa_fullscreen);
@@ -783,8 +788,13 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
 
 void
 os_window_update_size_increments(OSWindow *window) {
-    if (window->handle && window->fonts_data) glfwSetWindowSizeIncrements(
-            window->handle, window->fonts_data->cell_width, window->fonts_data->cell_height);
+    if (OPT(resize_in_steps)) {
+        if (window->handle && window->fonts_data) glfwSetWindowSizeIncrements(
+                window->handle, window->fonts_data->cell_width, window->fonts_data->cell_height);
+    } else {
+        if (window->handle) glfwSetWindowSizeIncrements(
+                window->handle, GLFW_DONT_CARE, GLFW_DONT_CARE);
+    }
 }
 
 #ifdef __APPLE__

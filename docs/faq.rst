@@ -64,7 +64,7 @@ server, use the following one-liner instead (it
 is slower as it needs to ssh into the server twice, but will work with most
 servers)::
 
-    infocmp xterm-kitty | ssh myserver tic -x -o \~/.terminfo /dev/stdin
+    infocmp -a xterm-kitty | ssh myserver tic -x -o \~/.terminfo /dev/stdin
 
 If you are behind a proxy (like Balabit) that prevents this, you must redirect the
 1st command to a file, copy that to the server and run ``tic`` manually.  If you
@@ -240,7 +240,7 @@ How do I map key presses in kitty to different keys in the terminal program?
 This is accomplished by using ``map`` with :sc:`send_text <send_text>` in :file:`kitty.conf`.
 For example::
 
-    map alt+s send_text all \x13
+    map alt+s send_text normal,application \x13
 
 This maps :kbd:`alt+s` to :kbd:`ctrl+s`. To figure out what bytes to use for
 the :sc:`send_text <send_text>` you can use the ``show_key`` kitten. Run::

@@ -204,11 +204,22 @@ realloc_hb(HistoryBuf *old, unsigned int lines, unsigned int columns, ANSIBuf *a
     return ans;
 }
 
+
+typedef struct CursorTrack {
+    index_type num_content_lines;
+    bool is_beyond_content;
+    struct { index_type x, y; } before;
+    struct { index_type x, y; } after;
+    struct { index_type x, y; } temp;
+} CursorTrack;
+
 static inline LineBuf*
-realloc_lb(LineBuf *old, unsigned int lines, unsigned int columns, index_type *nclb, index_type *ncla, HistoryBuf *hb, index_type *x, index_type *y, ANSIBuf *as_ansi_buf) {
+realloc_lb(LineBuf *old, unsigned int lines, unsigned int columns, index_type *nclb, index_type *ncla, HistoryBuf *hb, CursorTrack *a, CursorTrack *b, ANSIBuf *as_ansi_buf) {
     LineBuf *ans = alloc_linebuf(lines, columns);
     if (ans == NULL) { PyErr_NoMemory(); return NULL; }
-    linebuf_rewrap(old, ans, nclb, ncla, hb, x, y, as_ansi_buf);
+    a->temp.x = a->before.x; a->temp.y = a->before.y;
+    b->temp.x = b->before.x; b->temp.y = b->before.y;
+    linebuf_rewrap(old, ans, nclb, ncla, hb, &a->temp.x, &a->temp.y, &b->temp.x, &b->temp.y, as_ansi_buf);
     return ans;
 }
 
@@ -263,21 +274,21 @@ index_selection(const Screen *self, Selections *selections, bool up) {
     self->is_dirty = true; \
     index_selection(self, &self->selections, false);
 
-
 static bool
 screen_resize(Screen *self, unsigned int lines, unsigned int columns) {
     if (self->overlay_line.is_active) deactivate_overlay_line(self);
     lines = MAX(1u, lines); columns = MAX(1u, columns);
 
     bool is_main = self->linebuf == self->main_linebuf;
-    index_type num_content_lines_before, num_content_lines_after, num_content_lines;
-    unsigned int cursor_x = 0, cursor_y = 0;
-    bool cursor_is_beyond_content = false;
+    index_type num_content_lines_before, num_content_lines_after;
     unsigned int lines_after_cursor_before_resize = self->lines - self->cursor->y;
-#define setup_cursor() { \
-        cursor_x = x; cursor_y = y; \
-        cursor_is_beyond_content = num_content_lines_before > 0 && self->cursor->y >= num_content_lines_before; \
-        num_content_lines = num_content_lines_after; \
+    CursorTrack cursor = {.before = {self->cursor->x, self->cursor->y}};
+    CursorTrack main_saved_cursor = {.before = {self->main_savepoint.cursor.x, self->main_savepoint.cursor.y}};
+    CursorTrack alt_saved_cursor = {.before = {self->alt_savepoint.cursor.x, self->alt_savepoint.cursor.y}};
+#define setup_cursor(which) { \
+    which.after.x = which.temp.x; which.after.y = which.temp.y; \
+    which.is_beyond_content = num_content_lines_before > 0 && self->cursor->y >= num_content_lines_before; \
+    which.num_content_lines = num_content_lines_after; \
 }
     // Resize overlay line
     if (!init_overlay_line(self, columns)) return false;
@@ -286,21 +297,19 @@ screen_resize(Screen *self, unsigned int lines, unsigned int columns) {
     HistoryBuf *nh = realloc_hb(self->historybuf, self->historybuf->ynum, columns, &self->as_ansi_buf);
     if (nh == NULL) return false;
     Py_CLEAR(self->historybuf); self->historybuf = nh;
-    index_type x = self->cursor->x, y = self->cursor->y;
-    LineBuf *n = realloc_lb(self->main_linebuf, lines, columns, &num_content_lines_before, &num_content_lines_after, self->historybuf, &x, &y, &self->as_ansi_buf);
+    LineBuf *n = realloc_lb(self->main_linebuf, lines, columns, &num_content_lines_before, &num_content_lines_after, self->historybuf, &cursor, &main_saved_cursor, &self->as_ansi_buf);
     if (n == NULL) return false;
-
-
     Py_CLEAR(self->main_linebuf); self->main_linebuf = n;
-    if (is_main) setup_cursor();
+    if (is_main) setup_cursor(cursor);
+    setup_cursor(main_saved_cursor);
     grman_resize(self->main_grman, self->lines, lines, self->columns, columns);
 
     // Resize alt linebuf
-    x = self->cursor->x, y = self->cursor->y;
-    n = realloc_lb(self->alt_linebuf, lines, columns, &num_content_lines_before, &num_content_lines_after, NULL, &x, &y, &self->as_ansi_buf);
+    n = realloc_lb(self->alt_linebuf, lines, columns, &num_content_lines_before, &num_content_lines_after, NULL, &cursor, &alt_saved_cursor, &self->as_ansi_buf);
     if (n == NULL) return false;
     Py_CLEAR(self->alt_linebuf); self->alt_linebuf = n;
-    if (!is_main) setup_cursor();
+    if (!is_main) setup_cursor(cursor);
+    setup_cursor(alt_saved_cursor);
     grman_resize(self->alt_grman, self->lines, lines, self->columns, columns);
 #undef setup_cursor
 
@@ -320,19 +329,24 @@ screen_resize(Screen *self, unsigned int lines, unsigned int columns) {
     clear_selection(&self->selections);
     clear_selection(&self->url_ranges);
     /* printf("old_cursor: (%u, %u) new_cursor: (%u, %u) beyond_content: %d\n", self->cursor->x, self->cursor->y, cursor_x, cursor_y, cursor_is_beyond_content); */
-    self->cursor->x = MIN(cursor_x, self->columns - 1);
-    self->cursor->y = MIN(cursor_y, self->lines - 1);
-    if (cursor_is_beyond_content) {
-        self->cursor->y = num_content_lines;
+#define S(c, w) c->x = MIN(w.after.x, self->columns - 1); c->y = MIN(w.after.y, self->lines - 1);
+    S(self->cursor, cursor);
+    S((&(self->main_savepoint.cursor)), main_saved_cursor);
+    S((&(self->alt_savepoint.cursor)), alt_saved_cursor);
+#undef S
+    if (cursor.is_beyond_content) {
+        self->cursor->y = cursor.num_content_lines;
         if (self->cursor->y >= self->lines) { self->cursor->y = self->lines - 1; screen_index(self); }
     }
     if (is_main && OPT(scrollback_fill_enlarged_window)) {
         const unsigned int top = 0, bottom = self->lines-1;
+        Savepoint *sp = is_main ? &self->main_savepoint : &self->alt_savepoint;
         while (self->cursor->y + 1 < self->lines && self->lines - self->cursor->y > lines_after_cursor_before_resize) {
             if (!historybuf_pop_line(self->historybuf, self->alt_linebuf->line)) break;
             INDEX_DOWN;
             linebuf_copy_line_to(self->main_linebuf, self->alt_linebuf->line, 0);
             self->cursor->y++;
+            sp->cursor.y = MIN(sp->cursor.y + 1, self->lines - 1);
         }
     }
     return true;
@@ -2106,6 +2120,86 @@ deactivate_overlay_line(Screen *self) {
 
 // }}}
 
+// URLs {{{
+static void
+extend_url(Screen *screen, Line *line, index_type *x, index_type *y, char_type sentinel) {
+    unsigned int count = 0;
+    while(count++ < 10) {
+        if (*x != line->xnum - 1) break;
+        bool next_line_starts_with_url_chars = false;
+        line = screen_visual_line(screen, *y + 2);
+        if (line) next_line_starts_with_url_chars = line_startswith_url_chars(line);
+        line = screen_visual_line(screen, *y + 1);
+        if (!line) break;
+        // we deliberately allow non-continued lines as some programs, like
+        // mutt split URLs with newlines at line boundaries
+        index_type new_x = line_url_end_at(line, 0, false, sentinel, next_line_starts_with_url_chars);
+        if (!new_x && !line_startswith_url_chars(line)) break;
+        *y += 1; *x = new_x;
+    }
+}
+
+static char_type
+get_url_sentinel(Line *line, index_type url_start) {
+    char_type before = 0, sentinel;
+    if (url_start > 0 && url_start < line->xnum) before = line->cpu_cells[url_start - 1].ch;
+    switch(before) {
+        case '"':
+        case '\'':
+        case '*':
+            sentinel = before; break;
+        case '(':
+            sentinel = ')'; break;
+        case '[':
+            sentinel = ']'; break;
+        case '{':
+            sentinel = '}'; break;
+        case '<':
+            sentinel = '>'; break;
+        default:
+            sentinel = 0; break;
+    }
+    return sentinel;
+}
+
+bool
+screen_detect_url(Screen *screen, unsigned int x, unsigned int y) {
+    bool has_url = false;
+    index_type url_start, url_end = 0;
+    Line *line = screen_visual_line(screen, y);
+    if (line->cpu_cells[x].hyperlink_id) {
+        screen_mark_hyperlink(screen, x, y);
+        return true;
+    }
+    char_type sentinel;
+    if (line) {
+        url_start = line_url_start_at(line, x);
+        if (url_start < line->xnum) {
+            bool next_line_starts_with_url_chars = false;
+            if (y < screen->lines - 1) {
+                line = screen_visual_line(screen, y+1);
+                next_line_starts_with_url_chars = line_startswith_url_chars(line);
+                line = screen_visual_line(screen, y);
+            }
+            sentinel = get_url_sentinel(line, url_start);
+            url_end = line_url_end_at(line, x, true, sentinel, next_line_starts_with_url_chars);
+        }
+        has_url = url_end > url_start;
+    }
+    if (has_url) {
+        index_type y_extended = y;
+        extend_url(screen, line, &url_end, &y_extended, sentinel);
+        screen_mark_url(screen, url_start, y, url_end, y_extended);
+    } else {
+        screen_mark_url(screen, 0, 0, 0, 0);
+    }
+    return has_url;
+}
+
+
+
+// }}}
+
 // Python interface {{{
 #define WRAP0(name) static PyObject* name(Screen *self, PyObject *a UNUSED) { screen_##name(self); Py_RETURN_NONE; }
 #define WRAP0x(name) static PyObject* xxx_##name(Screen *self, PyObject *a UNUSED) { screen_##name(self); Py_RETURN_NONE; }
@@ -2390,6 +2484,7 @@ WRAP0(tab)
 WRAP0(linefeed)
 WRAP0(carriage_return)
 WRAP2(set_margins, 1, 1)
+WRAP2(detect_url, 0, 0)
 WRAP0(rescale_images)
 
 static PyObject*
@@ -2420,10 +2515,10 @@ copy_colors_from(Screen *self, Screen *other) {
 }
 
 static PyObject*
-text_for_selection(Screen *self, PyObject *a UNUSED) {
+text_for_selections(Screen *self, Selections *selections) {
     PyObject *lines = NULL;
-    for (size_t i = 0; i < self->selections.count; i++) {
-        PyObject *temp = text_for_range(self, self->selections.items + i, true);
+    for (size_t i = 0; i < selections->count; i++) {
+        PyObject *temp = text_for_range(self, selections->items + i, true);
         if (temp) {
             if (lines) {
                 lines = extend_tuple(lines, temp);
@@ -2435,6 +2530,17 @@ text_for_selection(Screen *self, PyObject *a UNUSED) {
     if (!lines) lines = PyTuple_New(0);
     return lines;
 }
+
+static PyObject*
+text_for_selection(Screen *self, PyObject *a UNUSED) {
+    return text_for_selections(self, &self->selections);
+}
+
+static PyObject*
+text_for_marked_url(Screen *self, PyObject *a UNUSED) {
+    return text_for_selections(self, &self->url_ranges);
+}
+
 
 bool
 screen_selection_range_for_line(Screen *self, index_type y, index_type *start, index_type *end) {
@@ -2974,9 +3080,11 @@ static PyMethodDef methods[] = {
     MND(mark_as_dirty, METH_NOARGS)
     MND(resize, METH_VARARGS)
     MND(set_margins, METH_VARARGS)
+    MND(detect_url, METH_VARARGS)
     MND(rescale_images, METH_NOARGS)
     MND(current_key_encoding_flags, METH_NOARGS)
     MND(text_for_selection, METH_NOARGS)
+    MND(text_for_marked_url, METH_NOARGS)
     MND(is_rectangle_select, METH_NOARGS)
     MND(scroll, METH_VARARGS)
     MND(send_escape_code_to_child, METH_VARARGS)

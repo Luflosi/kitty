@@ -3,7 +3,7 @@
 # License: GPL v3 Copyright: 2018, Kovid Goyal <kovid at kovidgoyal.net>
 
 from functools import lru_cache
-from typing import Any, Dict, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from .config import build_ansi_color_table
 from .fast_data_types import (
@@ -234,7 +234,16 @@ def draw_tab_with_powerline(draw_data: DrawData, screen: Screen, tab: TabBarData
             screen.cursor.bg = inactive_bg
         screen.draw(separator_symbol)
     else:
+        prev_fg = screen.cursor.fg
+        if tab_bg == tab_fg:
+            screen.cursor.fg = default_bg
+        elif tab_bg != default_bg:
+            c1 = draw_data.inactive_bg.contrast(draw_data.default_bg)
+            c2 = draw_data.inactive_bg.contrast(draw_data.inactive_fg)
+            if c1 < c2:
+                screen.cursor.fg = default_bg
         screen.draw(f' {separator_alt_symbol}')
+        screen.cursor.fg = prev_fg
 
     end = screen.cursor.x
     if end < screen.columns:
@@ -247,19 +256,25 @@ class TabBar:
     def __init__(self, os_window_id: int):
         self.os_window_id = os_window_id
         self.num_tabs = 1
+        self.data_buffer_size = 0
+        self.blank_rects: Tuple[Rect, ...] = ()
+        self.laid_out_once = False
+        self.apply_options()
+
+    def apply_options(self) -> None:
         opts = get_options()
+        self.dirty = True
         self.margin_width = pt_to_px(opts.tab_bar_margin_width, self.os_window_id)
         self.cell_width, cell_height = cell_size_for_window(self.os_window_id)
-        self.data_buffer_size = 0
-        self.laid_out_once = False
-        self.dirty = True
-        self.screen = s = Screen(None, 1, 10, 0, self.cell_width, cell_height)
+        if not hasattr(self, 'screen'):
+            self.screen = s = Screen(None, 1, 10, 0, self.cell_width, cell_height)
+        else:
+            s = self.screen
         s.color_profile.update_ansi_color_table(build_ansi_color_table(opts))
         s.color_profile.set_configured_colors(
             color_as_int(opts.inactive_tab_foreground),
             color_as_int(opts.tab_bar_background or opts.background)
         )
-        self.blank_rects: Tuple[Rect, ...] = ()
         sep = opts.tab_separator
         self.trailing_spaces = self.leading_spaces = 0
         while sep and sep[0] == ' ':
@@ -315,6 +330,7 @@ class TabBar:
         central, tab_bar, vw, vh, cell_width, cell_height = viewport_for_window(self.os_window_id)
         if tab_bar.width < 2:
             return
+        opts = get_options()
         self.cell_width = cell_width
         s = self.screen
         viewport_width = max(4 * cell_width, tab_bar.width - 2 * self.margin_width)
@@ -325,10 +341,23 @@ class TabBar:
         margin = (viewport_width - ncells * cell_width) // 2 + self.margin_width
         self.window_geometry = g = WindowGeometry(
             margin, tab_bar.top, viewport_width - margin, tab_bar.bottom, s.columns, s.lines)
+        blank_rects: List[Rect] = []
         if margin > 0:
-            self.blank_rects = (Rect(0, g.top, g.left, g.bottom + 1), Rect(g.right - 1, g.top, viewport_width, g.bottom + 1))
-        else:
-            self.blank_rects = ()
+            blank_rects.append(Rect(0, g.top, g.left, g.bottom + 1))
+            blank_rects.append(Rect(g.right - 1, g.top, viewport_width, g.bottom + 1))
+        if opts.tab_bar_margin_height:
+            if opts.tab_bar_edge == 3:  # bottom
+                if opts.tab_bar_margin_height.outer:
+                    blank_rects.append(Rect(0, tab_bar.bottom + 1, vw, vh))
+                if opts.tab_bar_margin_height.inner:
+                    blank_rects.append(Rect(0, central.bottom + 1, vw, vh))
+            else:  # top
+                if opts.tab_bar_margin_height.outer:
+                    blank_rects.append(Rect(0, 0, vw, tab_bar.top))
+                if opts.tab_bar_margin_height.inner:
+                    blank_rects.append(Rect(0, tab_bar.bottom + 1, vw, central.top))
+
+        self.blank_rects = tuple(blank_rects)
         self.screen_geometry = sg = calculate_gl_geometry(g, vw, vh, cell_width, cell_height)
         set_tab_bar_render_data(self.os_window_id, sg.xstart, sg.ystart, sg.dx, sg.dy, self.screen)
 

@@ -8,7 +8,7 @@ import termios
 from kitty.boss import Boss
 from kitty.fonts import FontFeature
 from kitty.fonts.render import FontObject
-from kitty.options_stub import Options
+from kitty.options.types import Options
 
 # Constants {{{
 MOUSE_SELECTION_LINE: int
@@ -634,7 +634,7 @@ class ColorProfile:
     def reset_color(self, num: int) -> None:
         pass
 
-    def update_ansi_color_table(self, val: List[int]) -> None:
+    def update_ansi_color_table(self, val: int) -> None:
         pass
 
     def set_configured_colors(
@@ -659,7 +659,7 @@ def os_window_font_size(
     pass
 
 
-def cocoa_set_notification_activated_callback(identifier: Callable[[str], None]) -> None:
+def cocoa_set_notification_activated_callback(identifier: Optional[Callable[[str], None]]) -> None:
     pass
 
 
@@ -1182,4 +1182,8 @@ def click_mouse_url(os_window_id: int, tab_id: int, window_id: int) -> None:
 
 
 def mouse_selection(os_window_id: int, tab_id: int, window_id: int, code: int, button: int) -> None:
+    pass
+
+
+def apply_options_update() -> None:
     pass

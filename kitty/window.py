@@ -35,15 +35,14 @@ from .fast_data_types import (
 )
 from .keys import keyboard_mode_name
 from .notify import NotificationCommand, handle_notification_cmd
-from .options_stub import Options
+from .options.types import Options
 from .rgb import to_color
 from .terminfo import get_capabilities
 from .types import MouseEvent, ScreenGeometry, WindowGeometry
 from .typing import BossType, ChildType, EdgeLiteral, TabType, TypedDict
 from .utils import (
     color_as_int, get_primary_selection, load_shaders, log_error, open_cmd,
-    open_url, parse_color_set, read_shell_environment, sanitize_title,
-    set_primary_selection
+    open_url, parse_color_set, sanitize_title, set_primary_selection
 )
 
 MatchPatternType = Union[Pattern[str], Tuple[Pattern[str], Optional[Pattern[str]]]]
@@ -398,6 +397,12 @@ class Window:
         else:
             val = round(val)
         return int(val)
+
+    def apply_options(self) -> None:
+        opts = get_options()
+        self.update_effective_padding()
+        self.change_titlebar_color()
+        setup_colors(self.screen, opts)
 
     @property
     def title(self) -> str:
@@ -806,9 +811,6 @@ class Window:
                 if 'write-clipboard' in cc:
                     write('c', set_clipboard_string)
             if 'p' in where:
-                if cc == 'clipboard':
-                    if 'write-clipboard' in cc:
-                        write('c', set_clipboard_string)
                 if 'write-primary' in cc:
                     write('p', set_primary_selection)
 
@@ -826,6 +828,9 @@ class Window:
     # mouse actions {{{
     def mouse_click_url(self) -> None:
         click_mouse_url(self.os_window_id, self.tab_id, self.id)
+
+    def mouse_discard_event(self) -> None:
+        pass
 
     def mouse_click_url_or_select(self) -> None:
         if not self.screen.has_selection():
@@ -905,27 +910,7 @@ class Window:
     def show_scrollback(self) -> None:
         text = self.as_text(as_ansi=True, add_history=True, add_wrap_markers=True)
         data = self.pipe_data(text, has_wrap_markers=True)
-
-        def prepare_arg(x: str) -> str:
-            x = x.replace('INPUT_LINE_NUMBER', str(data['input_line_number']))
-            x = x.replace('CURSOR_LINE', str(data['cursor_y']))
-            x = x.replace('CURSOR_COLUMN', str(data['cursor_x']))
-            return x
-
-        cmd = list(map(prepare_arg, get_options().scrollback_pager))
-        if not os.path.isabs(cmd[0]):
-            import shutil
-            exe = shutil.which(cmd[0])
-            if not exe:
-                env = read_shell_environment(get_options())
-                if env and 'PATH' in env:
-                    exe = shutil.which(cmd[0], path=env['PATH'])
-                    if exe:
-                        cmd[0] = exe
-        bdata: Union[str, bytes, None] = data['text']
-        if isinstance(bdata, str):
-            bdata = bdata.encode('utf-8')
-        get_boss().display_scrollback(self, bdata, cmd)
+        get_boss().display_scrollback(self, data['text'], data['input_line_number'])
 
     def paste_bytes(self, text: Union[str, bytes]) -> None:
         # paste raw bytes without any processing
@@ -1016,8 +1001,8 @@ class Window:
         self.current_marker_spec = key
 
     def set_marker(self, spec: Union[str, Sequence[str]]) -> None:
-        from .config import parse_marker_spec, toggle_marker
         from .marks import marker_from_spec
+        from .options.utils import parse_marker_spec, toggle_marker
         if isinstance(spec, str):
             func, (ftype, spec_, flags) = toggle_marker('toggle_marker', spec)
         else:
