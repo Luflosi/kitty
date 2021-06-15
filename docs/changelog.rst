@@ -4,6 +4,27 @@ Changelog
 |kitty| is a feature-rich, cross-platform, *fast*, GPU based terminal.
 To update |kitty|, :doc:`follow the instructions <binary>`.
 
+0.21.2 [future]
+----------------------
+
+- Add support for the XTVERSION escape code
+
+- macOS: Fix middle-click to paste from clipboard not working (:iss:`3730`)
+
+
+0.21.1 [2021-06-14]
+----------------------
+
+- macOS: Fix a regression in the previous release that broke rendering of
+  strikeout (:iss:`3717`)
+
+- macOS: Fix a crash when rendering ligatures larger than 128 characters
+  (:iss:`3724`)
+
+- Fix a regression in the previous release that could cause a crash when
+  changing layouts and mousing (:iss:`3713`)
+
+
 0.21.0 [2021-06-12]
 ----------------------
 

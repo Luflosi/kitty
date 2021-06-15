@@ -140,6 +140,10 @@ changes the appearance of the zero (0), to make it more easily distinguishable
 from Ø. Fira Code Retina also includes other discretionary features known as
 Stylistic Sets which have the tags :code:`ss01` through :code:`ss20`.
 
+For the exact syntax to use for individual features, see the
+:link:`Harfbuzz documentation
+<https://harfbuzz.github.io/harfbuzz-hb-common.html#hb-feature-from-string>`.
+
 Note that this code is indexed by PostScript name, and not the font
 family. This allows you to define very precise feature settings; e.g. you can
 disable a feature in the italic font but not in the regular font.
@@ -492,7 +496,7 @@ mma('Discard press event for link click',
 
 
 mma('Paste from the primary selection',
-    'paste_selection middle release ungrabbed paste_selection',
+    'paste_selection middle release ungrabbed paste_from_selection',
     )
 
 mma('Start selecting text',
@@ -3329,6 +3333,11 @@ the new conf settings *replace* the old ones.
 '''
     )
 
+map('Reload kitty.conf',
+    'reload_config_file cmd+control+, load_config_file',
+    only='macos'
+    )
+
 map('Debug kitty configuration',
     'debug_config kitty_mod+f6 debug_config',
     long_text='''
@@ -3336,6 +3345,12 @@ Show details about exactly what configuration kitty is running with and
 its host environment. Useful for debugging issues.
 '''
     )
+
+map('Debug kitty configuration',
+    'debug_config cmd+option+, debug_config',
+    only='macos'
+    )
+
 
 map('Send arbitrary text on key presses',
     'send_text ctrl+shift+alt+h send_text all Hello World',
