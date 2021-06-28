@@ -94,6 +94,19 @@ opt('adjust_column_width', '0',
     option_type='adjust_line_height', ctype='!adjust_column_width',
     )
 
+opt('adjust_baseline', '0',
+    option_type='adjust_baseline', ctype='!adjust_baseline',
+    add_to_default=False,
+    long_text='''
+Adjust the vertical alignment of text (the height in the cell at which text is
+positioned). You can use either numbers, which are interpreted as pixels or a
+percentages (number followed by %), which are interpreted as the percentage of
+the line height. A positive value moves the baseline up, and a negative value
+moves them down. The underline and strikethrough positions are adjusted
+accordingly.
+'''
+    )
+
 opt('+symbol_map', 'U+E0A0-U+E0A3,U+E0C0-U+E0C7 PowerlineSymbols',
     option_type='symbol_map',
     add_to_default=False,
@@ -365,6 +378,14 @@ are still clickable.
 '''
     )
 
+opt('url_excluded_characters', '',
+    ctype='!url_excluded_characters',
+    long_text='''
+Additional characters to be disallowed from URLs, when detecting URLs under the
+mouse cursor. By default, all characters legal in URLs are allowed.
+'''
+    )
+
 opt('copy_on_select', 'no',
     option_type='copy_on_select',
     long_text='''
@@ -459,15 +480,19 @@ number ``b1 ... b8`` can be used to refer to upto eight buttons on a mouse.
 
 ``event-type`` is one ``press``, ``release``, ``doublepress``, ``triplepress``,
 ``click`` and ``doubleclick``.  ``modes`` indicates whether the action is
-performed when the mouse is grabbed by the terminal application or not. It can
-have one or more or the values, ``grabbed,ungrabbed``. Note that the click
-and double click events have a delay of :opt:`click_interval` to disambiguate
-from double and triple presses.
+performed when the mouse is grabbed by the program running in the terminal, or
+not. It can have one or more or the values, ``grabbed,ungrabbed``. ``grabbed``
+refers to when the program running in the terminal has requested mouse events.
+Note that the click and double click events have a delay of
+:opt:`click_interval` to disambiguate from double and triple presses.
 
 You can run kitty with the :option:`kitty --debug-input` command line option
 to see mouse events. See the builtin actions below to get a sense of what is possible.
 
-If you want to unmap an action map it to ``no-op``.
+If you want to unmap an action map it to ``no-op``. For example, to disable opening
+of URLs with a plain click::
+
+    mouse_map left click ungrabbed no-op
 
 .. note::
     Once a selection is started, releasing the button that started it will
@@ -489,7 +514,7 @@ mma('Click the link under the mouse cursor',
     )
 
 mma('Discard press event for link click',
-    'click_url_discard ctrl+shift+left press grabbed mouse_discard_event',
+    'click_url_discard ctrl+shift+left press grabbed discard_event',
     long_text='Prevent this press event from being sent to the program that has'
     ' grabbed the mouse, as the corresponding release event is used to open a URL.'
     )
@@ -913,7 +938,8 @@ opt('tab_title_template', '"{title}"',
     long_text='''
 A template to render the tab title. The default just renders the title. If you
 wish to include the tab-index as well, use something like: :code:`{index}:
-{title}`. Useful if you have shortcuts mapped for :code:`goto_tab N`. In
+{title}`. Useful if you have shortcuts mapped for :code:`goto_tab N`. If you
+prefer to see the index as a superscript, use {sup.index}. In
 addition you can use :code:`{layout_name}` for the current layout name and
 :code:`{num_windows}` for the number of windows in the tab. Note that formatting
 is done by Python's string formatting machinery, so you can use, for instance,

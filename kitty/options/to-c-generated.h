@@ -58,6 +58,19 @@ convert_from_opts_adjust_column_width(PyObject *py_opts, Options *opts) {
 }
 
 static void
+convert_from_python_adjust_baseline(PyObject *val, Options *opts) {
+    adjust_baseline(val, opts);
+}
+
+static void
+convert_from_opts_adjust_baseline(PyObject *py_opts, Options *opts) {
+    PyObject *ret = PyObject_GetAttrString(py_opts, "adjust_baseline");
+    if (ret == NULL) return;
+    convert_from_python_adjust_baseline(ret, opts);
+    Py_DECREF(ret);
+}
+
+static void
 convert_from_python_disable_ligatures(PyObject *val, Options *opts) {
     opts->disable_ligatures = PyLong_AsLong(val);
 }
@@ -249,6 +262,19 @@ convert_from_opts_detect_urls(PyObject *py_opts, Options *opts) {
     PyObject *ret = PyObject_GetAttrString(py_opts, "detect_urls");
     if (ret == NULL) return;
     convert_from_python_detect_urls(ret, opts);
+    Py_DECREF(ret);
+}
+
+static void
+convert_from_python_url_excluded_characters(PyObject *val, Options *opts) {
+    url_excluded_characters(val, opts);
+}
+
+static void
+convert_from_opts_url_excluded_characters(PyObject *py_opts, Options *opts) {
+    PyObject *ret = PyObject_GetAttrString(py_opts, "url_excluded_characters");
+    if (ret == NULL) return;
+    convert_from_python_url_excluded_characters(ret, opts);
     Py_DECREF(ret);
 }
 
@@ -886,6 +912,8 @@ convert_opts_from_python_opts(PyObject *py_opts, Options *opts) {
     if (PyErr_Occurred()) return false;
     convert_from_opts_adjust_column_width(py_opts, opts);
     if (PyErr_Occurred()) return false;
+    convert_from_opts_adjust_baseline(py_opts, opts);
+    if (PyErr_Occurred()) return false;
     convert_from_opts_disable_ligatures(py_opts, opts);
     if (PyErr_Occurred()) return false;
     convert_from_opts_cursor_shape(py_opts, opts);
@@ -915,6 +943,8 @@ convert_opts_from_python_opts(PyObject *py_opts, Options *opts) {
     convert_from_opts_url_prefixes(py_opts, opts);
     if (PyErr_Occurred()) return false;
     convert_from_opts_detect_urls(py_opts, opts);
+    if (PyErr_Occurred()) return false;
+    convert_from_opts_url_excluded_characters(py_opts, opts);
     if (PyErr_Occurred()) return false;
     convert_from_opts_select_by_word_characters(py_opts, opts);
     if (PyErr_Occurred()) return false;

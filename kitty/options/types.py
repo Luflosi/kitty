@@ -45,6 +45,7 @@ option_names = (  # {{{
  'active_tab_font_style',
  'active_tab_foreground',
  'active_tab_title_template',
+ 'adjust_baseline',
  'adjust_column_width',
  'adjust_line_height',
  'allow_hyperlinks',
@@ -416,6 +417,7 @@ option_names = (  # {{{
  'touch_scroll_multiplier',
  'update_check_interval',
  'url_color',
+ 'url_excluded_characters',
  'url_prefixes',
  'url_style',
  'visual_bell_duration',
@@ -435,6 +437,7 @@ class Options:
     active_tab_font_style: typing.Tuple[bool, bool] = (True, True)
     active_tab_foreground: Color = Color(red=0, green=0, blue=0)
     active_tab_title_template: typing.Optional[str] = None
+    adjust_baseline: typing.Union[int, float] = 0
     adjust_column_width: typing.Union[int, float] = 0
     adjust_line_height: typing.Union[int, float] = 0
     allow_hyperlinks: int = 1
@@ -544,6 +547,7 @@ class Options:
     touch_scroll_multiplier: float = 1.0
     update_check_interval: float = 24.0
     url_color: Color = Color(red=0, green=135, blue=189)
+    url_excluded_characters: str = ''
     url_prefixes: typing.Tuple[str, ...] = ('http', 'https', 'file', 'ftp', 'gemini', 'irc', 'gopher', 'mailto', 'news', 'git')
     url_style: int = 3
     visual_bell_duration: float = 0
@@ -862,7 +866,7 @@ defaults.mouse_map = [
     # click_url
     MouseMapping(0, 5, -1, False, KeyAction('mouse_click_url')),
     # click_url_discard
-    MouseMapping(0, 5, 1, True, KeyAction('mouse_discard_event')),
+    MouseMapping(0, 5, 1, True, KeyAction('discard_event')),
     # paste_selection
     MouseMapping(2, 0, -1, False, KeyAction('paste_from_selection')),
     # start_simple_selection

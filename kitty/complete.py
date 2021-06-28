@@ -6,17 +6,23 @@ import os
 import shlex
 import sys
 from typing import (
-    Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+    Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple,
+    Union
 )
 
-from kittens.runner import all_kitten_names, get_kitten_cli_docs
+from kittens.runner import (
+    all_kitten_names, get_kitten_cli_docs, get_kitten_completer
+)
 
 from .cli import (
-    OptionDict, OptionSpecSeq, options_for_completion, parse_option_spec
+    OptionDict, OptionSpecSeq, options_for_completion, parse_option_spec,
+    prettify
 )
+from .fast_data_types import truncate_point_for_length, wcswidth
 from .rc.base import all_command_names, command_for_name
 from .shell import options_for_cmd
 from .types import run_once
+from .utils import screen_size_function
 
 '''
 To add completion for a new shell, you need to:
@@ -39,7 +45,37 @@ them into something your shell will understand.
 
 parsers: Dict[str, Callable] = {}
 serializers: Dict[str, Callable] = {}
-MathGroup = Dict[str, str]
+
+
+class MatchGroup:
+
+    def __init__(
+        self, x: Union[Dict[str, str], Iterable[str]],
+        trailing_space: bool = True,
+        is_files: bool = False,
+        word_transforms: Optional[Dict[str, str]] = None,
+    ):
+        self.mdict = x if isinstance(x, dict) else dict.fromkeys(x, '')
+        self.trailing_space = trailing_space
+        self.is_files = is_files
+        self.word_transforms = word_transforms or {}
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.mdict)
+
+    def transformed_words(self) -> Iterator[str]:
+        for w in self:
+            yield self.word_transforms.get(w, w)
+
+    def transformed_items(self) -> Iterator[Tuple[str, str]]:
+        for w, desc in self.items():
+            yield self.word_transforms.get(w, w), desc
+
+    def items(self) -> Iterator[Tuple[str, str]]:
+        return iter(self.mdict.items())
+
+    def values(self) -> Iterator[str]:
+        return iter(self.mdict.values())
 
 
 def debug(*a: Any, **kw: Any) -> None:
@@ -69,10 +105,17 @@ class Delegate:
 class Completions:
 
     def __init__(self) -> None:
-        self.match_groups: Dict[str, MathGroup] = {}
-        self.no_space_groups: Set[str] = set()
-        self.files_groups: Set[str] = set()
+        self.match_groups: Dict[str, MatchGroup] = {}
         self.delegate: Delegate = Delegate()
+
+    def add_match_group(
+        self, name: str, x: Union[Dict[str, str], Iterable[str]],
+        trailing_space: bool = True,
+        is_files: bool = False,
+        word_transforms: Optional[Dict[str, str]] = None
+    ) -> MatchGroup:
+        self.match_groups[name] = m = MatchGroup(x, trailing_space, is_files, word_transforms)
+        return m
 
 
 @run_once
@@ -159,16 +202,55 @@ def fish_input_parser(data: str) -> ParseResult:
 @output_serializer
 def zsh_output_serializer(ans: Completions) -> str:
     lines = []
+
+    screen = screen_size_function(sys.stderr.fileno())()
+    width = screen.cols
+
+    def fmt_desc(word: str, desc: str, max_word_len: int) -> Iterator[str]:
+        if not desc:
+            yield word
+            return
+        desc = prettify(desc.splitlines()[0])
+        multiline = False
+        if wcswidth(word) > max_word_len:
+            max_desc_len = width - 2
+            multiline = True
+        else:
+            word = word.ljust(max_word_len)
+            max_desc_len = width - max_word_len - 3
+        if wcswidth(desc) > max_desc_len:
+            desc = desc[:truncate_point_for_length(desc, max_desc_len - 2)]
+            desc += '…'
+
+        word = f'\x1b[32m{word}\x1b[39m'
+        if multiline:
+            ans = f'{word}\n  {desc}'
+        else:
+            ans = f'{word}  {desc}'
+        yield ans
+
     for description, matches in ans.match_groups.items():
-        cmd = ['compadd', '-U', '-J', shlex.quote(description), '-X', shlex.quote(description)]
-        if description in ans.no_space_groups:
+        cmd = ['compadd', '-U', '-J', shlex.quote(description), '-X', shlex.quote('%B' + description + '%b')]
+        if not matches.trailing_space:
             cmd += ['-S', '""']
-        if description in ans.files_groups:
+        if matches.is_files:
             cmd.append('-f')
             common_prefix = os.path.commonprefix(tuple(matches))
             if common_prefix:
                 cmd.extend(('-p', shlex.quote(common_prefix)))
-                matches = {k[len(common_prefix):]: v for k, v in matches.items()}
+                matches = MatchGroup({k[len(common_prefix):]: v for k, v in matches.items()})
+        has_descriptions = any(matches.values())
+        if has_descriptions or matches.word_transforms:
+            lines.append('compdescriptions=(')
+            sz = max(map(wcswidth, matches.transformed_words()))
+            limit = min(16, sz)
+            for word, desc in matches.transformed_items():
+                lines.extend(map(shlex.quote, fmt_desc(word, desc, limit)))
+            lines.append(')')
+            if has_descriptions:
+                cmd.append('-l')
+            cmd.append('-d')
+            cmd.append('compdescriptions')
         cmd.append('--')
         for word in matches:
             cmd.append(shlex.quote(word))
@@ -190,9 +272,8 @@ def zsh_output_serializer(ans: Completions) -> str:
 def bash_output_serializer(ans: Completions) -> str:
     lines = []
     for description, matches in ans.match_groups.items():
-        needs_space = description not in ans.no_space_groups
         for word in matches:
-            if needs_space:
+            if matches.trailing_space:
                 word += ' '
             lines.append('COMPREPLY+=({})'.format(shlex.quote(word)))
     # debug('\n'.join(lines))
@@ -212,11 +293,11 @@ def fish_output_serializer(ans: Completions) -> str:
 
 def completions_for_first_word(ans: Completions, prefix: str, entry_points: Iterable[str], namespaced_entry_points: Iterable[str]) -> None:
     cmds = ['@' + c for c in remote_control_command_names()]
-    ans.match_groups['Entry points'] = {
+    ans.add_match_group('Entry points', {
         k: '' for k in
         list(entry_points) + cmds + ['+' + k for k in namespaced_entry_points]
         if not prefix or k.startswith(prefix)
-    }
+    })
     if prefix:
         ans.delegate = Delegate([prefix], 0)
 
@@ -229,7 +310,7 @@ def kitty_cli_opts(ans: Completions, prefix: Optional[str] = None) -> None:
         aliases = frozenset(x for x in opt['aliases'] if x.startswith(prefix)) if prefix else opt['aliases']
         for alias in aliases:
             matches[alias] = opt['help'].strip()
-    ans.match_groups['Options'] = matches
+    ans.add_match_group('Options', matches)
 
 
 def complete_kitty_cli_arg(ans: Completions, opt: Optional[OptionDict], prefix: str, unknown_args: Delegate) -> None:
@@ -242,8 +323,7 @@ def complete_kitty_cli_arg(ans: Completions, opt: Optional[OptionDict], prefix: 
     if dest == 'override':
         from kitty.config import option_names_for_completion
         k = 'Config directives'
-        ans.match_groups[k] = {k+'=': '' for k in option_names_for_completion() if k.startswith(prefix)}
-        ans.no_space_groups.add(k)
+        ans.add_match_group(k, {k+'=': '' for k in option_names_for_completion() if k.startswith(prefix)}, trailing_space=False)
     elif dest == 'config':
 
         def is_conf_file(x: str) -> bool:
@@ -260,13 +340,11 @@ def complete_kitty_cli_arg(ans: Completions, opt: Optional[OptionDict], prefix: 
         complete_files_and_dirs(ans, prefix, files_group_name='Directories', predicate=os.path.isdir)
     elif dest == 'start_as':
         k = 'Start as'
-        ans.match_groups[k] = {x: x for x in 'normal,fullscreen,maximized,minimized'.split(',') if x.startswith(prefix)}
-        ans.no_space_groups.add(k)
+        ans.add_match_group(k, {x: x for x in 'normal,fullscreen,maximized,minimized'.split(',') if x.startswith(prefix)}, trailing_space=False)
     elif dest == 'listen_on':
         if ':' not in prefix:
             k = 'Address type'
-            ans.match_groups[k] = {x: x for x in ('unix:', 'tcp:') if x.startswith(prefix)}
-            ans.no_space_groups.add(k)
+            ans.add_match_group(k, {x: x for x in ('unix:', 'tcp:') if x.startswith(prefix)}, trailing_space=False)
         elif prefix.startswith('unix:') and not prefix.startswith('@'):
             complete_files_and_dirs(ans, prefix[len('unix:'):], files_group_name='UNIX sockets', add_prefix='unix:')
 
@@ -295,7 +373,7 @@ def complete_alias_map(
         opt = option_map.get(w)
         if w is last_word and not new_word:
             if w.startswith('-'):
-                ans.match_groups['Options'] = {k: opt['help'] for k, opt in option_map.items() if k.startswith(last_word)}
+                ans.add_match_group('Options', {k: opt['help'] for k, opt in option_map.items() if k.startswith(last_word)})
             else:
                 if complete_args is not None:
                     complete_args(ans, None, last_word, Delegate(words, i))
@@ -312,7 +390,7 @@ def complete_alias_map(
         prefix = '' if new_word else last_word
         if complete_args is not None:
             complete_args(ans, None, prefix, Delegate())
-        ans.match_groups['Options'] = {k: opt['help'] for k, opt in option_map.items() if k.startswith(prefix)}
+        ans.add_match_group('Options', {k: opt['help'] for k, opt in option_map.items() if k.startswith(prefix)})
 
 
 def complete_cli(
@@ -391,12 +469,9 @@ def complete_files_and_dirs(
         files = (add_prefix + x for x in files)
 
     if dirs:
-        ans.match_groups['Directories'] = dict.fromkeys(dirs)
-        ans.files_groups.add('Directories')
-        ans.no_space_groups.add('Directories')
+        ans.add_match_group('Directories', dirs, trailing_space=False, is_files=True)
     if files:
-        ans.match_groups[files_group_name] = dict.fromkeys(files)
-        ans.files_groups.add(files_group_name)
+        ans.add_match_group(files_group_name, files, is_files=True)
 
 
 def complete_icat_args(ans: Completions, opt: Optional[OptionDict], prefix: str, unknown_args: Delegate) -> None:
@@ -433,7 +508,7 @@ def remote_args_completer(title: str, words: Iterable[str]) -> CompleteArgsFunc:
 
     def complete_names_for_arg(ans: Completions, opt: Optional[OptionDict], prefix: str, unknown_args: Delegate) -> None:
         if opt is None:
-            ans.match_groups[title] = {c: '' for c in items if c.startswith(prefix)}
+            ans.add_match_group(title, {c: '' for c in items if c.startswith(prefix)})
 
     return complete_names_for_arg
 
@@ -450,6 +525,13 @@ def complete_diff_args(ans: Completions, opt: Optional[OptionDict], prefix: str,
 
 
 def complete_kitten(ans: Completions, kitten: str, words: Sequence[str], new_word: bool) -> None:
+    try:
+        completer = get_kitten_completer(kitten)
+    except SystemExit:
+        completer = None
+    if completer is not None:
+        completer(ans, words, new_word)
+        return
     try:
         cd = get_kitten_cli_docs(kitten)
     except SystemExit:
@@ -482,24 +564,24 @@ def find_completions(words: Sequence[str], new_word: bool, entry_points: Iterabl
     if words[0] == '@':
         if len(words) == 1 or (len(words) == 2 and not new_word):
             prefix = words[1] if len(words) > 1 else ''
-            ans.match_groups['Remote control commands'] = {c: '' for c in remote_control_command_names() if c.startswith(prefix)}
+            ans.add_match_group('Remote control commands', {c: '' for c in remote_control_command_names() if c.startswith(prefix)})
         else:
             complete_remote_command(ans, words[1], words[2:], new_word)
         return ans
     if words[0].startswith('@'):
         if len(words) == 1 and not new_word:
             prefix = words[0]
-            ans.match_groups['Remote control commands'] = {'@' + c: '' for c in remote_control_command_names() if c.startswith(prefix)}
+            ans.add_match_group('Remote control commands', {'@' + c: '' for c in remote_control_command_names() if c.startswith(prefix)})
         else:
             complete_remote_command(ans, words[0][1:], words[1:], new_word)
     if words[0] == '+':
         if len(words) == 1 or (len(words) == 2 and not new_word):
             prefix = words[1] if len(words) > 1 else ''
-            ans.match_groups['Entry points'] = {c: '' for c in namespaced_entry_points if c.startswith(prefix)}
+            ans.add_match_group('Entry points', {c: '' for c in namespaced_entry_points if c.startswith(prefix)})
         else:
             if words[1] == 'kitten':
                 if len(words) == 2 or (len(words) == 3 and not new_word):
-                    ans.match_groups['Kittens'] = dict.fromkeys(k for k in all_kitten_names() if k.startswith('' if len(words) == 2 else words[2]))
+                    ans.add_match_group('Kittens', (k for k in all_kitten_names() if k.startswith('' if len(words) == 2 else words[2])))
                 else:
                     complete_kitten(ans, words[2], words[3:], new_word)
         return ans
@@ -507,13 +589,13 @@ def find_completions(words: Sequence[str], new_word: bool, entry_points: Iterabl
         if len(words) == 1:
             if new_word:
                 if words[0] == '+kitten':
-                    ans.match_groups['Kittens'] = dict.fromkeys(all_kitten_names())
+                    ans.add_match_group('Kittens', all_kitten_names())
             else:
                 prefix = words[0]
-                ans.match_groups['Entry points'] = {c: '' for c in namespaced_entry_points if c.startswith(prefix)}
+                ans.add_match_group('Entry points', (c for c in namespaced_entry_points if c.startswith(prefix)))
         else:
             if len(words) == 2 and not new_word:
-                ans.match_groups['Kittens'] = dict.fromkeys(k for k in all_kitten_names() if k.startswith(words[1]))
+                ans.add_match_group('Kittens', (k for k in all_kitten_names() if k.startswith(words[1])))
             else:
                 if words[0] == '+kitten':
                     complete_kitten(ans, words[1], words[2:], new_word)

@@ -4,22 +4,27 @@
 
 import re
 import sys
-from binascii import unhexlify, hexlify
+from binascii import hexlify, unhexlify
 from contextlib import suppress
-from typing import Dict, Iterable, List, Type
+from typing import Dict, Iterable, List, Type, Optional
 
 from kitty.cli import parse_args
 from kitty.cli_stub import QueryTerminalCLIOptions
-from kitty.constants import appname
-from kitty.utils import TTYIO
+from kitty.constants import appname, str_version
+from kitty.options.types import Options
 from kitty.terminfo import names
+from kitty.utils import TTYIO
 
 
 class Query:
     name: str = ''
     ans: str = ''
-    query_name: str = ''
     help_text: str = ''
+    override_query_name: str = ''
+
+    @property
+    def query_name(self) -> str:
+        return self.override_query_name or f'kitty-query-{self.name}'
 
     def __init__(self) -> None:
         self.encoded_query_name = hexlify(self.query_name.encode('utf-8')).decode('ascii')
@@ -45,6 +50,10 @@ class Query:
     def output_line(self) -> str:
         return self.ans
 
+    @staticmethod
+    def get_result(opts: Options) -> str:
+        raise NotImplementedError()
+
 
 all_queries: Dict[str, Type[Query]] = {}
 
@@ -57,22 +66,98 @@ def query(cls: Type[Query]) -> Type[Query]:
 @query
 class TerminalName(Query):
     name: str = 'name'
-    query_name: str = 'TN'
+    override_query_name: str = 'name'
     help_text: str = f'Terminal name ({names[0]})'
+
+    @staticmethod
+    def get_result(opts: Options) -> str:
+        return appname
 
 
 @query
 class TerminalVersion(Query):
     name: str = 'version'
-    query_name: str = 'kitty-query-version'
     help_text: str = 'Terminal version, for e.g.: 0.19.2'
+
+    @staticmethod
+    def get_result(opts: Options) -> str:
+        return str_version
 
 
 @query
 class AllowHyperlinks(Query):
     name: str = 'allow_hyperlinks'
-    query_name: str = 'kitty-query-allow_hyperlinks'
     help_text: str = 'yes, no or ask'
+
+    @staticmethod
+    def get_result(opts: Options) -> str:
+        return 'ask' if opts.allow_hyperlinks == 0b11 else ('yes' if opts.allow_hyperlinks else 'no')
+
+
+@query
+class FontFamily(Query):
+    name: str = 'font_family'
+    help_text: str = 'The current font\'s PostScript name'
+
+    @staticmethod
+    def get_result(opts: Options) -> str:
+        from kitty.fast_data_types import current_fonts
+        cf = current_fonts()
+        return str(cf['medium'].display_name())
+
+
+@query
+class BoldFont(Query):
+    name: str = 'bold_font'
+    help_text: str = 'The current bold font\'s PostScript name'
+
+    @staticmethod
+    def get_result(opts: Options) -> str:
+        from kitty.fast_data_types import current_fonts
+        cf = current_fonts()
+        return str(cf['bold'].display_name())
+
+
+@query
+class ItalicFont(Query):
+    name: str = 'italic_font'
+    help_text: str = 'The current italic font\'s PostScript name'
+
+    @staticmethod
+    def get_result(opts: Options) -> str:
+        from kitty.fast_data_types import current_fonts
+        cf = current_fonts()
+        return str(cf['italic'].display_name())
+
+
+@query
+class BiFont(Query):
+    name: str = 'bold_italic_font'
+    help_text: str = 'The current bold-italic font\'s PostScript name'
+
+    @staticmethod
+    def get_result(opts: Options) -> str:
+        from kitty.fast_data_types import current_fonts
+        cf = current_fonts()
+        return str(cf['bi'].display_name())
+
+
+@query
+class FontSize(Query):
+    name: str = 'font_size'
+    help_text: str = 'The current overall font size (individual windows can have different per window font sizes)'
+
+    @staticmethod
+    def get_result(opts: Options) -> str:
+        return f'{opts.font_size:g}'
+
+
+def get_result(name: str) -> Optional[str]:
+    from kitty.fast_data_types import get_options
+    q = all_queries.get(name)
+    if q is None:
+        return None
+    return q.get_result(get_options())
 
 
 def do_queries(queries: Iterable, cli_opts: QueryTerminalCLIOptions) -> Dict[str, str]:

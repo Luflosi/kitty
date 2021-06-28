@@ -30,7 +30,7 @@ typedef struct {
     unsigned int url_style;
     unsigned int scrollback_pager_history_size;
     bool scrollback_fill_enlarged_window;
-    char_type select_by_word_characters[256]; size_t select_by_word_characters_count;
+    char_type *select_by_word_characters;
     color_type url_color, background, foreground, active_border_color, inactive_border_color, bell_border_color;
     color_type mark1_foreground, mark1_background, mark2_foreground, mark2_background, mark3_foreground, mark3_background;
     monotonic_t repaint_delay, input_delay;
@@ -40,8 +40,8 @@ typedef struct {
     unsigned int macos_option_as_alt;
     float macos_thicken_font;
     WindowTitleIn macos_show_window_title_in;
-    int adjust_line_height_px, adjust_column_width_px;
-    float adjust_line_height_frac, adjust_column_width_frac;
+    int adjust_line_height_px, adjust_column_width_px, adjust_baseline_px;
+    float adjust_line_height_frac, adjust_column_width_frac, adjust_baseline_frac;
     float background_opacity, dim_opacity;
 
     char* background_image;
@@ -70,6 +70,7 @@ typedef struct {
         UrlPrefix *values;
         size_t num, max_prefix_len;
     } url_prefixes;
+    char_type *url_excluded_characters;
     bool detect_urls;
     bool tab_bar_hidden;
     double font_size;

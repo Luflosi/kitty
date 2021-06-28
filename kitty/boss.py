@@ -906,6 +906,8 @@ class Boss:
                     if exe:
                         cmd[0] = exe
 
+        if os.path.basename(cmd[0]) == 'less':
+            cmd.append('-+F')  # reset --quit-if-one-screen
         tab = self.active_tab
         if tab is not None:
             bdata = data.encode('utf-8') if isinstance(data, str) else data
@@ -1774,3 +1776,7 @@ class Boss:
             set_clipboard_string(re.sub(r'\x1b.+?m', '', output))
             output += '\n\x1b[35mThis debug output has been copied to the clipboard\x1b[m'
             self.display_scrollback(w, output, title=_('Current kitty options'))
+
+    def discard_event(self) -> None:
+        pass
+    mouse_discard_event = discard_event

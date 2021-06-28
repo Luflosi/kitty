@@ -19,27 +19,31 @@ all_words(PYNOARG) {
     return ans;
 }
 
-static inline void
-add_matches(const word_trie *wt, char_type *codepoints, size_t *pos, const size_t sz) {
+static void
+add_matches(const word_trie *wt, PyObject *ans) {
     size_t num = mark_groups[wt->match_offset];
-    for (size_t i = wt->match_offset + 1; i < wt->match_offset + 1 + num && *pos < sz; i++, (*pos)++) {
-        codepoints[*pos] = mark_to_cp[mark_groups[i]];
+    for (size_t i = wt->match_offset + 1; i < wt->match_offset + 1 + num; i++) {
+        PyObject *t = PyLong_FromUnsignedLong(mark_to_cp[mark_groups[i]]);
+        if (!t) return;
+        int ret = PySet_Add(ans, t);
+        Py_DECREF(t);
+        if (ret != 0) return;
     }
 }
 
 static void
-process_trie_node(const word_trie *wt, char_type *codepoints, size_t *pos, const size_t sz) {
-    if (wt->match_offset) add_matches(wt, codepoints, pos, sz);
+process_trie_node(const word_trie *wt, PyObject *ans) {
+    if (wt->match_offset) { add_matches(wt, ans); if (PyErr_Occurred()) return; }
     size_t num_children = children_array[wt->children_offset];
     if (!num_children) return;
     for (size_t c = wt->children_offset + 1; c < wt->children_offset + 1 + num_children; c++) {
-        if (*pos > sz) return;
         uint32_t x = children_array[c];
-        process_trie_node(&all_trie_nodes[x >> 8], codepoints, pos, sz);
+        process_trie_node(&all_trie_nodes[x >> 8], ans);
+        if (PyErr_Occurred()) return;
     }
 }
 
-static inline PyObject*
+static PyObject*
 codepoints_for_word(const char *word, size_t len) {
     const word_trie *wt = all_trie_nodes;
     for (size_t i = 0; i < len; i++) {
@@ -57,14 +61,10 @@ codepoints_for_word(const char *word, size_t len) {
         }
         if (!found) return PyFrozenSet_New(NULL);
     }
-    static char_type codepoints[1024];
-    size_t cpos = 0;
-    process_trie_node(wt, codepoints, &cpos, arraysz(codepoints));
-    PyObject *ans = PyFrozenSet_New(NULL); if (ans == NULL) return NULL;
-    for (size_t i = 0; i < cpos; i++) {
-        PyObject *t = PyLong_FromUnsignedLong(codepoints[i]); if (t == NULL) { Py_DECREF(ans); return NULL; }
-        int ret = PySet_Add(ans, t); Py_DECREF(t); if (ret != 0) { Py_DECREF(ans); return NULL; }
-    }
+    PyObject *ans = PyFrozenSet_New(NULL);
+    if (!ans) return NULL;
+    process_trie_node(wt, ans);
+    if (PyErr_Occurred()) return NULL;
     return ans;
 }
 
